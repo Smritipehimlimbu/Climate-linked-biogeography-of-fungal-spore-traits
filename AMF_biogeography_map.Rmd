@@ -1,0 +1,112 @@
+---
+title: "AMF_biogeography_map"
+author: "Smriti Pehim Limbu"
+date: "2025-04-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##package upload
+```{r}
+library(pacman)
+p_load(usethis,readr, dplyr, tidyverse, factoextra, MASS, mgcv, ggplot2, patchwork, ggpubr, MASS, bestNormalize, ggmap, shadowtext, cowplot)
+```
+#data upload
+```{r}
+df_metadata.biogeography.traits <- read_csv("df_metadata.biogeography.traits.csv")
+str(df_metadata.biogeography.traits)
+```
+
+#Figure .1 map of study sites, filtering one very high ppt value from df_meta id 1121 for paper (manuscript)
+```{r}
+world_map <- map_data("world")
+world_map <- world_map %>% filter(region!="Antarctica")
+
+#removing a data point that could not be verified
+
+df_metadata.biogeography.traits.one.id.removed <- df_metadata.biogeography.traits %>% filter(id!=1151)
+length(unique(df_metadata.biogeography.traits.one.id.removed$id))#3,507
+
+
+Map.fig.1 <- ggplot() +
+  
+  # World map base layer
+  geom_polygon(aes(x = long, y = lat, group = group), 
+               data = world_map, 
+               fill = "gray90", color = "black", size = 0.6) +
+  
+  # Plot all points except for wetland (this layer goes below wetland)
+  geom_point(data = df_metadata.biogeography.traits.one.id.removed %>% filter(Biome != "wetland"),
+             aes(x = Longitude_Decimal, y = Latitude_Decimal, color = Biome), 
+             shape = 21, size = 1.5, stroke = 1.8, alpha = 0.8, fill = "white") +
+  
+  # Add the wetland points as a separate layer, on top of other points
+  geom_point(data = df_metadata.biogeography.traits.one.id.removed %>% filter(Biome == "wetland"),
+             aes(x = Longitude_Decimal, y = Latitude_Decimal), 
+             shape = 21, size = 8, stroke = 1.8, fill = "white", color = "red") + 
+  scale_color_manual(values = c("#8B008B","turquoise1", "#4DAF4A", "#F0E442", "#0072B2", "#D55E00", 
+                                "#F781BF", "#999999", "#E41A1C")) +
+  
+  theme_minimal(base_size = 16) +
+  
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    panel.border = element_rect(color = "black", fill = NA, size = 1.2),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0, vjust = 1)
+  ) +
+  
+  # Add title
+  ggtitle("Map showing study sites and biomes")
+
+
+# Count the number of sites per biome
+biome_counts <- df_metadata.biogeography.traits.one.id.removed %>%
+  filter(!is.na(id)) %>%
+  distinct(id, Biome) %>%
+  count(Biome)
+# Reorder Biome by ascending count
+biome_counts$Biome <- factor(biome_counts$Biome, levels = biome_counts$Biome[order(biome_counts$n)])
+
+inset_plot <- ggplot(biome_counts, aes(x = Biome, y = n, fill = Biome)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual (values = c("#E41A1C", "turquoise1", "#999999", "#8B008B", "#F0E442", "#4DAF4A",  "#F781BF", "#D55E00", "#0072B2" )) +
+
+  expand_limits(y = c(0, max(biome_counts$n) + 1)) +  
+  
+  # Add numbers above the bars
+  geom_text(aes(label = n), vjust = -0.5, size = 2.2, color = "black", fontface="bold") + 
+  shadowtext::geom_shadowtext(aes(label = n), vjust = -0.5, size = 2.2, color = "black", bg.color = "white", bg.r = 0.15) +
+  ylab("No. of Sites") +
+  
+  theme_minimal(base_size = 10) + 
+  coord_cartesian(ylim = c(0, max(biome_counts$n) * 1.06)) +
+  theme(
+    legend.position = "none",  
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 7, color="black", angle = 45, hjust = 0.8),
+    axis.text.y = element_text(size = 8, color="black"),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color="black", fill=NA, size =1), axis.line = element_blank())
+
+
+# Combine main map and inset plot
+combined_plot <- ggdraw() +
+  draw_plot(Map.fig.1) + 
+  draw_plot(inset_plot, x = 0.012, y = 0.158, width = 0.30, height = 0.26)  
+
+ggsave("Fig.1.map.tiff", combined_plot, dpi=300, width = 9, height = 6.9 , units = "in")
+```
+
+
+
