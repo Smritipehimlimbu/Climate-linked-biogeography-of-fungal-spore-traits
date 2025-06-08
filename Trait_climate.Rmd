@@ -1,0 +1,1505 @@
+---
+title: "Trait_climate"
+author: "Smriti Pehim Limbu"
+date: "2025-04-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##package upload
+```{r}
+library(pacman)
+p_load(readr, dplyr, tidyverse, factoextra, MASS, mgcv, ggplot2, patchwork, ggpubr, MASS, bestNormalize, corrplot)
+```
+#data upload
+```{r}
+df_metadata.biogeography.traits <- read_csv("df_metadata.biogeography.traits.csv")
+```
+
+#PCA of environmental variables (Supplementary fig. 2)
+```{r}
+#Only using sites with abundance data and removing one site with really high MAP that could not be verified
+colnames(df_metadata.biogeography.traits)
+df_abundance <- df_metadata.biogeography.traits %>% filter(id!=1151) %>% filter(id<1433) %>%  group_by(id, marker, sequencing_platform, year_of_sampling,Biome,sample_type)%>% dplyr::summarize(Volume=weighted.mean(vol_mean, abundances, na.rm=TRUE), Ornamentation=weighted.mean(orn_height_mean, abundances, na.rm=TRUE), Investment=weighted.mean(investment_mean, abundances, na.rm=TRUE), Shape=weighted.mean(shape_median, abundances, na.rm=TRUE), Color=weighted.mean(color_most, abundances, na.rm=TRUE), MAT=mean(MAT, na.rm=TRUE), MAP=mean(MAP, na.rm=TRUE), pH=mean(soil.pH, na.rm=TRUE), Temp.annual.worldclim = mean(Temp.annual.worldclim, na.rm=TRUE), Temp.seasonality.worldclim=mean(Temp.seasonality.worldclim, na.rm=TRUE), Temp.max.worldclim=mean(Temp.max.worldclim, na.rm=TRUE), Temp.min.worldclim=mean(Temp.min.worldclim, na.rm=TRUE), Prec.annual.worldclim=mean(Prec.annual.worldclim, na.rm=TRUE), Prec.seasonality.worldclim=mean(Prec.seasonality.worldclim, na.rm=TRUE), Prec.max.worldclim=mean(Prec.max.worldclim, na.rm=TRUE), Prec.min.worldclim=mean(Prec.min.worldclim, na.rm=TRUE), mean_annual_vapor_worldclim=mean(mean_annual_vapor_worldclim, na.rm=TRUE), mean_annual_wind=mean(mean_annual_wind, na.rm=TRUE), Latitude_Decimal=mean(Latitude_Decimal, na.rm=TRUE), Longitude_Decimal=mean(Longitude_Decimal, na.rm=TRUE))
+
+summary(df_abundance)
+length(unique(df_abundance$id))
+
+
+df_abundance_cwm <- na.omit(df_abundance)
+str(df_abundance_cwm)
+colnames(df_abundance_cwm)
+colnames(df_metadata.biogeography.traits)
+unique(df_metadata.biogeography.traits$primers)
+
+length(unique(df_abundance_cwm$id)) #1311
+
+#PCA for environmental variables affecting traits
+df_abundance_cwm.environment <- df_abundance_cwm %>% ungroup() %>%  dplyr::select(MAT, MAP,pH, Temp.annual.worldclim, Temp.seasonality.worldclim, Temp.max.worldclim, Temp.min.worldclim, Prec.annual.worldclim, Prec.seasonality.worldclim, Prec.max.worldclim, Prec.min.worldclim, mean_annual_vapor_worldclim, mean_annual_wind)
+
+
+
+df_pca.abundance.normalized <- scale(df_abundance_cwm.environment)
+pca.cwm <- princomp(df_pca.abundance.normalized)
+summary(pca.cwm)
+pca.cwm$loadings[,1:5]
+
+# adding pca scores to traits
+df_pca.cwm.scores.traits <- data.frame(pca.cwm$scores, Volume=df_abundance_cwm$Volume, Ornamentation=df_abundance_cwm$Ornamentation, Investment=df_abundance_cwm$Investment,  Shape=df_abundance_cwm$Shape, Color=df_abundance_cwm$Color, latitude=df_abundance_cwm$Latitude_Decimal, longitude=df_abundance_cwm$Longitude_Decimal, Biome=df_abundance_cwm$Biome, sample_type=df_abundance_cwm$sample_type, target_gene=df_abundance_cwm$marker, sequencing_platform=df_abundance_cwm$sequencing_platform, time=df_abundance_cwm$year_of_sampling)
+
+df_pca.cwm.scores.traits<-cbind(df_abundance_cwm,pca.cwm$scores[,1:5])
+
+##################################################################Visualizing pca loadings
+
+# Convert loadings to a tidy dataframe
+df_cwm_pca_loading <- as.data.frame(unclass(pca.cwm$loadings))
+df_cwm_pca_loading$Variable <- rownames(df_cwm_pca_loading)
+
+# Convert to long format
+df_cwm_pca_long <- df_cwm_pca_loading %>%
+  pivot_longer(cols = starts_with("Comp"),  
+               names_to = "PC",
+               values_to = "Loading") 
+#Only plotting first two PCs
+df_cwm_pca_long <- df_cwm_pca_long %>% dplyr::filter(PC %in% c("Comp.1", "Comp.2")) %>% mutate(PC = str_replace(PC, "Comp\\.", "PC"))
+
+# Add a categorical sign column
+df_cwm_pca_long <- df_cwm_pca_long %>%
+  mutate(Loading_sign = ifelse(Loading >= 0, "Positive", "Negative")) %>% group_by(PC) %>%
+  mutate(Variable = reorder(Variable, -abs(Loading))) %>%
+  ungroup()
+
+custom_order <- c(
+  "Prec.min.worldclim",
+  "Prec.seasonality.worldclim",
+  "Prec.max.worldclim",
+  "Prec.annual.worldclim",
+  "MAP",
+  "Temp.seasonality.worldclim",
+  "Temp.min.worldclim",
+  "Temp.max.worldclim",
+  "Temp.annual.worldclim",
+  "MAT",
+  "mean_annual_vapor_worldclim",
+  "mean_annual_wind",
+  "pH"
+)
+
+df_cwm_pca_long$Variable <- factor(df_cwm_pca_long$Variable, levels = rev(custom_order))
+
+# Plot
+pca_loadings_fig <- ggplot(df_cwm_pca_long, aes(x = Loading, y = Variable, fill = Loading_sign)) +
+  geom_col(width = 0.7) +
+  facet_wrap(~PC, scales = "free_x", ncol = 2) +
+  scale_fill_manual(values = c("Positive" = "darkorange", "Negative" = "darkblue")) +
+  labs(x = "PCA loading", y = NULL, title = "PCA Loadings of Environmental Variables") +
+  theme_minimal(base_size = 18) +
+  theme(
+    strip.text = element_text(size = 18, face = "bold"),
+    axis.text.y = element_text(size = 14),
+    axis.text.x = element_text(size = 18),
+    panel.grid.major.y = element_blank(), plot.title = element_text(size = 20, face = "bold"),
+    legend.position = "none"
+  )+ geom_vline(xintercept = c(-0.3, 0.3), linetype = "dashed", color = "gray40")
+
+################PCA biplot with biomes
+library(ggplot2)
+library(dplyr)
+library(grid)  
+library(scales)
+library(ggrepel)
+library(ggpubr)
+
+scores <- as.data.frame(pca.cwm$scores)
+scores$Biome <- df_pca.cwm.scores.traits$Biome
+
+loadings <- as.data.frame(unclass(pca.cwm$loadings)[, 1:2])  # PC1 and PC2
+loadings$Variable <- rownames(loadings)
+
+arrow_scale <- 9
+loadings <- loadings %>%
+  mutate(PC1 = Comp.1 * arrow_scale,
+         PC2 = Comp.2 * arrow_scale)
+
+fig_pca_biplot <- ggplot(scores, aes(x = Comp.1, y = Comp.2, color = Biome)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  geom_segment(data = loadings,
+               aes(x = 0, y = 0, xend = PC1, yend = PC2),
+               arrow = arrow(length = unit(0.2, "cm")), color = "black") +
+  geom_text_repel(data = loadings,
+                aes(x = PC1 * 1.1, y = PC2 * 1.1, label = Variable),
+                color = "black",
+                size = 4,
+                fontface = "italic",
+                segment.color = "grey50",
+                max.overlaps = 20) +
+  scale_color_manual(values = c("#8B008B", "turquoise1", "#4DAF4A", "#F0E442",
+                                "#0072B2", "#D55E00", "#F781BF", "#999999", "#E41A1C")) +
+  labs(x = paste0("PC1 (", round(pca.cwm$sdev[1]^2 / sum(pca.cwm$sdev^2) * 100, 1), "%)"),
+       y = paste0("PC2 (", round(pca.cwm$sdev[2]^2 / sum(pca.cwm$sdev^2) * 100, 1), "%)"),
+       color = "Biome",
+       title = "PCA Biplot: Sites and Environmental Variables") +
+  theme_minimal(base_size = 18) + theme(plot.title = element_text(size = 20, face = "bold")) + geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40")
+
+
+#pca figure scree plot and PC1 and PC2 graph
+
+eig_fig <- fviz_eig(pca.cwm, addlabels = TRUE, barfill = "gray40", barcolor = "black") +
+  theme_minimal(base_size = 18) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 18, face = "bold"),
+    plot.title = element_text(size = 20, face = "bold")
+  )
+
+#####Combine
+combined_pca_plot <- ggarrange(
+  eig_fig, fig_pca_biplot,pca_loadings_fig,
+  ncol = 1, nrow = 3,
+  labels = c("a)", "b)","c)", font.label = list(size = 22, face = "bold"),  
+  heights = c(1, 1,1)
+))
+
+
+ggsave("combined_pca_plot.tiff", plot = combined_pca_plot, width = 14, height = 18, dpi = 300)
+
+########################################################################################
+
+#correlation among traits cwm
+
+traits <- df_pca.cwm.scores.traits %>% ungroup()%>% dplyr::select(Volume, Ornamentation, Shape, Investment, Color) 
+trait_cor <- cor(traits, use = "pairwise.complete.obs", method = "pearson")
+
+tiff("cwm_trait_correlation_plot.tiff", width = 6, height = 6, units = "in", res = 300)
+
+# Generate the plot
+corrplot(trait_cor,
+         method = "color",
+         type = "upper",
+         order = "hclust",
+         addCoef.col = "black",
+         tl.col = "black",
+         number.cex = 0.8,
+         col = colorRampPalette(c("blue", "white", "red"))(200),
+         diag = FALSE)
+
+
+dev.off()
+
+```
+####Testing if PCA makes sense with our data (Vieira, 2012 test): Testing against random data
+
+```{r}
+# My scaled env data
+data <- df_pca.abundance.normalized
+p <- ncol(data)
+n_iter <- 2000
+
+# observed PCA
+R_obs <- cor(data)
+eig_obs <- eigen(R_obs)
+eig_obs_values <- eig_obs$values
+eig_obs_pct <- eig_obs_values / sum(eig_obs_values) * 100
+load_obs <- eig_obs$vectors
+
+#bootstrap for 95% confidence interval for our observed PCA data
+set.seed(123)
+n_boot <- 2000
+obs_boot_mat <- matrix(NA, nrow = n_boot, ncol = p)
+for (i in 1:n_boot) {
+  boot_sample <- data[sample(1:nrow(data), replace = TRUE), ]
+  R_boot <- cor(boot_sample)
+  eig_boot <- eigen(R_boot)$values
+  eig_boot_pct <- eig_boot / sum(eig_boot) * 100
+  obs_boot_mat[i, ] <- eig_boot_pct
+}
+obs_lower <- apply(obs_boot_mat, 2, quantile, probs = 0.025)
+obs_upper <- apply(obs_boot_mat, 2, quantile, probs = 0.975)
+
+# null model
+rand_eigen_mat <- matrix(NA, nrow = n_iter, ncol = p)
+set.seed(456)
+for (i in 1:n_iter) {
+  data_null <- apply(data, 2, sample)
+  R_null <- cor(data_null)
+  eig_null <- eigen(R_null)$values
+  rand_eigen_mat[i, ] <- eig_null
+}
+rand_eigen_pct <- t(apply(rand_eigen_mat, 1, function(x) x / sum(x) * 100))
+rand_mean <- apply(rand_eigen_pct, 2, mean)
+rand_lower <- apply(rand_eigen_pct, 2, quantile, probs = 0.025)
+rand_upper <- apply(rand_eigen_pct, 2, quantile, probs = 0.975)
+
+# --- Combine into a dataframe for plotting ---
+df_plot <- data.frame(
+  PC = factor(1:p),
+  Original = eig_obs_pct,
+  Orig_Lower = obs_lower,
+  Orig_Upper = obs_upper,
+  Randomized = rand_mean,
+  Rand_Lower = rand_lower,
+  Rand_Upper = rand_upper
+)
+
+# plot observed vs null
+fig_PCA_test <- ggplot(df_plot, aes(x = as.numeric(as.character(PC)))) +
+  # Observed
+  geom_line(aes(y = Original, color = "Original Data"), size = 1.2) +
+  geom_point(aes(y = Original, color = "Original Data"), size = 2.5) +
+  geom_errorbar(aes(ymin = Orig_Lower, ymax = Orig_Upper),
+                width = 0.2, size = 0.8, color = "black") +
+
+  # Null
+  geom_line(aes(y = Randomized, color = "Randomized Null"), size = 1.2, linetype = "dashed") +
+  geom_point(aes(y = Randomized, color = "Randomized Null"), size = 2.5, shape = 16) +
+  geom_errorbar(aes(ymin = Rand_Lower, ymax = Rand_Upper),
+                width = 0.2, size = 0.8, color = "dodgerblue3") +
+
+  # Aesthetics
+  scale_color_manual(
+    name = "PCA Source",
+    values = c("Original Data" = "black", "Randomized Null" = "dodgerblue3")
+  ) +
+  scale_x_continuous(
+    breaks = seq_len(nrow(df_plot)),
+    labels = paste0("PC", seq_len(nrow(df_plot)))
+  ) +
+  scale_y_continuous(
+    limits = c(0, max(df_plot$Orig_Upper) + 5),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    x = "Principal Component",
+    y = "Percentage of Total Variation",
+    title = "Observed and Null Distribution of PCA Eigenvalues\nwith 95% Confidence Intervals"
+  ) +
+  theme_minimal(base_size = 18) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black"),
+    panel.grid.minor = element_blank(),
+    legend.position = "top"
+  )
+
+# Print 
+fig_PCA_test
+
+# Calculate p-values: proportion of null values >= observed
+p_values_PC <- numeric(p)
+
+for (j in 1:p) {
+  p_values_PC[j] <- mean(rand_eigen_pct[, j] >= eig_obs_pct[j])
+}
+
+# Optional: Adjust for multiple testing 
+p_values_adj <- p.adjust(p_values_PC, method = "BH")
+
+# Add to the plotting dataframe
+df_plot$P_Value <- p_values_PC
+df_plot$Adj_P_Value <- p_values_adj
+
+# View result
+df_plot[, c("PC", "Original", "P_Value", "Adj_P_Value")]
+
+ggsave("PCA_test_with_null.tiff", plot = fig_PCA_test, width = 14, height = 16, dpi = 300)
+
+
+```
+
+##Test for observed envrionmental variables vs randomized variables used for PCA
+
+```{r}
+# 'data' is the scaled environmental variable matrix
+p <- ncol(data)
+n_iter <- 2000
+
+# observed pca data
+R_obs <- cor(data)
+eig_obs <- eigen(R_obs)
+
+# Observed loadings and eigenvalues
+loadings_PC1 <- eig_obs$vectors[, 1]
+lambda_PC1 <- eig_obs$values[1]
+index_obs_PC1 <- loadings_PC1^2 * lambda_PC1^2
+
+loadings_PC2 <- eig_obs$vectors[, 2]
+lambda_PC2 <- eig_obs$values[2]
+index_obs_PC2 <- loadings_PC2^2 * lambda_PC2^2
+
+loadings_PC3 <- eig_obs$vectors[, 3]
+lambda_PC3 <- eig_obs$values[3]
+index_obs_PC3 <- loadings_PC3^2 * lambda_PC3^2
+
+# null distribution for PC1 - Pc3
+index_null_PC1 <- matrix(NA, nrow = n_iter, ncol = p)
+index_null_PC2 <- matrix(NA, nrow = n_iter, ncol = p)
+index_null_PC3 <- matrix(NA, nrow = n_iter, ncol = p)
+
+set.seed(123)
+for (i in 1:n_iter) {
+  data_null <- apply(data, 2, sample)
+  R_null <- cor(data_null)
+  eig_null <- eigen(R_null)
+  
+  # PC1
+  load1 <- eig_null$vectors[, 1]
+  lambda1 <- eig_null$values[1]
+  index_null_PC1[i, ] <- load1^2 * lambda1^2
+  
+  # PC2
+  load2 <- eig_null$vectors[, 2]
+  lambda2 <- eig_null$values[2]
+  index_null_PC2[i, ] <- load2^2 * lambda2^2
+  
+  # PC3
+  load3 <- eig_null$vectors[, 3]
+  lambda3 <- eig_null$values[3]
+  index_null_PC3[i, ] <- load3^2 * lambda3^2
+}
+
+# Calculate null summary stats
+index_null_summary <- function(index_null_matrix) {
+  list(
+    mean = apply(index_null_matrix, 2, mean),
+    lower = apply(index_null_matrix, 2, quantile, probs = 0.025),
+    upper = apply(index_null_matrix, 2, quantile, probs = 0.975)
+  )
+}
+
+null_PC1 <- index_null_summary(index_null_PC1)
+null_PC2 <- index_null_summary(index_null_PC2)
+null_PC3 <- index_null_summary(index_null_PC3)
+
+envn <- colnames(data)
+
+# visualization function
+plot_index <- function(envn, observed, null, title_label) {
+  df <- data.frame(
+    envn = factor(envn, levels = envn),
+    Observed = observed,
+    NullMean = null$mean,
+    Lower = null$lower,
+    Upper = null$upper
+  )
+  
+  ggplot(df, aes(x = envn)) +
+    geom_point(aes(y = NullMean), shape = 1, size = 3, color = "red") +
+    geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.2, color = "red") +
+    geom_point(aes(y = Observed), shape = 16, size = 3, color = "black") +
+    labs(x = "Environmental Variables", y = "Index", title = title_label) +
+    theme_minimal(base_size = 18) +
+    theme(
+      axis.text.x = element_text(color = "black", angle = 45, hjust = 1),
+      axis.title = element_text(face = "bold"),
+      plot.title = element_text(face = "bold")
+    )
+}
+
+# plot for PC1, PC2, PC3 
+fig_PC1_index <- plot_index(envn, index_obs_PC1, null_PC1, "PC1 Loadings vs Null Distribution")
+fig_PC2_index <- plot_index(envn, index_obs_PC2, null_PC2, "PC2 Loadings vs Null Distribution")
+fig_PC3_index <- plot_index(envn, index_obs_PC3, null_PC3, "PC3 Loadings vs Null Distribution")
+
+# Show plots
+print(fig_PC1_index)
+print(fig_PC2_index)
+print(fig_PC3_index)
+
+##Combine the Vieira, 2012 test and the index plots
+
+ggarranged_plot_PCA_test <- ggarrange(
+  fig_PCA_test, fig_PC1_index, fig_PC2_index, fig_PC3_index,
+  labels = c("a)", "b)", "c)", "d)"),
+  ncol = 2, nrow = 2,
+  align = "hv",
+  font.label = list(size = 26, face = "bold")
+)
+
+ggsave("PCA_test.tiff", plot = ggarranged_plot_PCA_test, width = 18, height = 18, dpi = 300)
+```
+
+#####testing pca scores and their directionality
+```{r} 
+#first look for correlation
+
+pc_scores <- as.data.frame(pca.cwm$scores[, 1:5])
+colnames(pc_scores) <- paste0("PC", 1:5)
+df_pca <- cbind(df_abundance_cwm.environment, pc_scores)
+colnames(df_pca)
+
+fig_pc1_mat <- ggplot(df_pca, aes(x = PC1, y = MAT)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 40,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "MAT (°C)") +
+  theme_minimal(base_size = 16)
+
+fig_pc1_vapor <- ggplot(df_pca, aes(x = PC1, y = mean_annual_vapor_worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+   stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 5,
+         size = 5) +
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "mean annual vapor (kPa)")+
+  theme_minimal(base_size = 16)
+
+fig_pc1_temp_annual_worldclim <- ggplot(df_pca, aes(x = PC1, y = Temp.annual.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+   stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 40,
+         size = 5) +
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "mean annual temperature(°C)")+
+  theme_minimal(base_size = 15)
+
+fig_pc1_temp_min <- ggplot(df_pca, aes(x = PC1, y = Temp.min.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+   stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x= -4, label.y = 40,
+         size = 5) +
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "minimum temperature (°C)")+
+  theme_minimal(base_size = 16)
+
+fig_pc1_map <- ggplot(df_pca, aes(x = PC1, y = MAP)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+   stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 0.98,
+         size = 5) +
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "MAP (mm)")+
+  theme_minimal(base_size = 16)
+
+fig_pc1_prec_max<- ggplot(df_pca, aes(x = PC1, y = Prec.max.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+   stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x.npc = 0.02, label.y.npc = 0.98,
+         size = 5) +
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "maximum precipitation (mm)")+
+  theme_minimal(base_size = 16)
+
+fig_pc1_prec_annual<- ggplot(df_pca, aes(x = PC1, y = Prec.annual.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+   stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x.npc = 0.02, label.y.npc = 0.98,
+         size = 5) +
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "mean annual precipitation (mm)")+
+  theme_minimal(base_size = 15)
+
+#combine figures (PC1)
+ggarranged_plot_PC1 <- ggarrange(fig_pc1_vapor,
+  fig_pc1_mat, fig_pc1_temp_annual_worldclim, fig_pc1_temp_min,fig_pc1_prec_annual, fig_pc1_prec_max, fig_pc1_map,
+  labels = c("a)", "b)", "c)", "d)", "e)", "f)", "g)"),  
+  ncol = 2, nrow = 4,        
+  align = "hv",  font.label = list(size = 18, face = "bold")               
+)
+
+
+ggarranged_plot_PC1_titled <- annotate_figure(
+  ggarranged_plot_PC1,
+  top = text_grob("Relationships Between PC1 and Environmental Variables", 
+                  face = "bold", size = 20)
+)
+
+ggsave("PC1_relationships.tiff", plot = ggarranged_plot_PC1_titled, width = 14, height = 16, dpi = 300)
+
+###############testing pc2 and their directionality
+fig_pc2_prec.min <- ggplot(df_pca, aes(x = PC2, y = Prec.min.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x.npc = 0.02, label.y.npc = 0.98,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC2 Scores",
+       y = "minimum precipitation (mm)")+
+  theme_minimal(base_size = 16)
+
+fig_pc2_prec.seasonality <- ggplot(df_pca, aes(x = PC2, y = Prec.seasonality.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x.npc = 0.02, label.y.npc = 0.98,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC2 Scores",
+       y = "Precipitation seasonality")+
+  theme_minimal(base_size = 16)
+
+fig_pc2_temp_max <- ggplot(df_pca, aes(x = PC2, y = Temp.max.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x.npc = 0.02, label.y.npc = 0.98,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC2 Scores",
+       y = "maximum temperature (°C)")+
+  theme_minimal(base_size = 16)
+
+fig_pc2_pH <- ggplot(df_pca, aes(x = PC2, y = pH)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x.npc = 0.02, label.y.npc = 0.98,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC2 Scores",
+       y = "pH")+
+  theme_minimal(base_size = 16)
+
+#combine figures (PC2)
+ggarranged_plot_PC2 <- ggarrange(fig_pc2_prec.min, fig_pc2_prec.seasonality, fig_pc2_temp_max, fig_pc2_pH,
+  labels = c("a)", "b)", "c)", "d)",  
+  ncol = 4, nrow = 1,             
+  align = "hv",  font.label = list(size = 18, face = "bold")                   
+))
+
+ggarranged_plot_PC2_titled <- annotate_figure(
+  ggarranged_plot_PC2,
+  top = text_grob("Relationships Between PC2 and Environmental Variables", 
+                  face = "bold", size = 20)
+)
+
+ggsave("PC2_relationships.tiff", plot = ggarranged_plot_PC2_titled, width = 14, height = 12, dpi = 300)
+
+```
+
+
+#Community weighted traits (Figure 2)
+```{r}
+######################################### cwm shape  ##############################################################
+df_pca.cwm.scores.traits$Biome=as.factor(df_pca.cwm.scores.traits$Biome)
+df_pca.cwm.scores.traits$sample_type=as.factor(df_pca.cwm.scores.traits$sample_type)
+df_pca.cwm.scores.traits$marker=as.factor(df_pca.cwm.scores.traits$marker)
+df_pca.cwm.scores.traits$sequencing_platform=as.factor(df_pca.cwm.scores.traits$sequencing_platform)
+df_pca.cwm.scores.traits$year_of_sampling=as.numeric(df_pca.cwm.scores.traits$year_of_sampling)
+
+#check distribution
+hist(df_pca.cwm.scores.traits$Shape)
+
+df_pca.cwm.scores.traits$Shape_boxcox <- df_pca.cwm.scores.traits$Shape^2 
+
+# Check the distribution again
+hist(df_pca.cwm.scores.traits$Shape_boxcox)
+
+# First, fit a preliminary model to obtain initial residuals
+model_initial <- mgcv::bam(
+  Shape_boxcox ~ Comp.1 + Comp.2 +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 15),
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+
+# Calculate weights based on fitted values (inverse variance approximation)
+weights_var <- 1 / abs(fitted(model_initial)) 
+
+# Refit the model using variance weights
+model.cwm.shape <- mgcv::bam(
+  Shape_boxcox ~ Comp.1 + Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 15),
+  weights = weights_var,      # Add weights
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+
+# Model summary
+summary(model.cwm.shape)
+
+# Check diagnostics again
+gam.check(model.cwm.shape)
+plot(model.cwm.shape, pages=1, all.terms=TRUE)
+
+# Create a data frame with fitted values and residuals
+residuals_df_shape <- data.frame(
+  Fitted_Values = fitted(model.cwm.shape),
+  Residuals = residuals(model.cwm.shape)
+)
+
+# Residuals vs. Fitted Values Plot with histogram plot (Diagnostics)
+residuals_plot <- ggplot(residuals_df_shape, aes(x = Fitted_Values, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values"
+  ) +
+  theme_minimal()
+
+# Histogram of Residuals Plot
+histogram_plot <- ggplot(residuals_df_shape, aes(x = Residuals)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(
+    x = "Residuals",
+    y = "Frequency",
+    title = "Histogram of Residuals"
+  ) +
+  theme_minimal()
+
+# Combine the two plots side by side
+combined_plot.cwm.shape <- residuals_plot + theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  ) + histogram_plot + plot_layout(ncol = 2)+ theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )
+
+####gam visualization shape
+# Create a new dataset for prediction
+new_data.1 <- df_pca.cwm.scores.traits
+new_data.1 <- new_data.1[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data.1$Comp.1 <- seq(min(df_pca.cwm.scores.traits$Comp.1), 
+                       max(df_pca.cwm.scores.traits$Comp.1), length.out = 100)
+
+# Predict partial effect
+new_data.1$predshape <- predict(model.cwm.shape, newdata = new_data.1, type = "response")
+
+################################Comp.1 vs. shape fig ###############
+
+Shape.pc.1.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.1, y = Shape_boxcox, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data.1, aes(x = Comp.1, y = predshape), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Shape_boxcox, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Shape_boxcox, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Shape") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  + scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+#############Comp.2 vs. shape fig   ################
+
+# Create a new dataset for prediction Comp.2 vs volume
+new_data <- df_pca.cwm.scores.traits
+new_data <- new_data[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data$Comp.2 <- seq(min(df_pca.cwm.scores.traits$Comp.2), 
+                       max(df_pca.cwm.scores.traits$Comp.2), length.out = 100)
+
+# Predict partial effect
+new_data$predshape2 <- predict(model.cwm.shape, newdata = new_data, type = "response")
+
+
+# Plot the partial effect with observed data points
+
+Shape.pc.2.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.2, y = Shape_boxcox, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data, aes(x = Comp.2, y = predshape2), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Shape_boxcox, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Shape_boxcox, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Shape") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+############################################### shape spatial patterns 
+png("spatial_spore_shape.png", width = 1600, height = 1200, res = 300)
+
+vis.gam(model.cwm.shape,
+        view = c("Latitude_Decimal", "Longitude_Decimal"),
+        type = "response",
+        plot.type = "contour",
+        color = "topo",
+        main = "Spatial variation in predicted spore shape")
+
+dev.off()
+
+
+
+###################################################cwm volume  ######################
+hist(df_pca.cwm.scores.traits$Volume)
+summary(df_pca.cwm.scores.traits$Volume)
+sum(is.na(df_pca.cwm.scores.traits$Volume))
+
+# Box-Cox transformation requires all values > 0
+boxcox_model <- MASS::boxcox(lm(Volume ~ 1, data = df_pca.cwm.scores.traits))
+
+# Find the optimal lambda
+lambda <- boxcox_model$x[which.max(boxcox_model$y)]
+print(lambda)
+
+# Apply the Box-Cox transformation
+df_pca.cwm.scores.traits$Volume_boxcox <- (df_pca.cwm.scores.traits$Volume^lambda - 1) / lambda
+
+# Check the histogram after transformation
+hist(df_pca.cwm.scores.traits$Volume_boxcox)
+
+#Model
+model_initial_volume <- mgcv::bam(
+  Volume_boxcox ~ Comp.1 + Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 15),
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+
+# Calculate weights based on residual
+weights_var <- 1 / abs(fitted(model_initial))
+
+
+#Refit the model with updated weights
+model_weighted_volume <- mgcv::bam(
+  Volume_boxcox ~ Comp.1 + Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 15),
+  weights = weights_var,  # Apply updated weights
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+
+summary(model_weighted_volume)
+
+
+# Create a data frame with fitted values and residuals
+residuals_df <- data.frame(
+  Fitted_Values = fitted(model_weighted_volume),
+  Residuals = residuals(model_weighted_volume)
+)
+
+# Residuals vs. Fitted Values Plot (diagnostics)
+residuals_plot <- ggplot(residuals_df, aes(x = Fitted_Values, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values"
+  ) +
+  theme_minimal()
+
+# Histogram of Residuals Plot
+histogram_plot <- ggplot(residuals_df, aes(x = Residuals)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(
+    x = "Residuals",
+    y = "Frequency",
+    title = "Histogram of Residuals"
+  ) +
+  theme_minimal()
+
+# Combine the two plots side by side
+combined_plot.cwm.volume <- residuals_plot + theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  ) + histogram_plot + plot_layout(ncol = 2)+ theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )
+
+# Create a new dataset for prediction of volume
+new_data.1 <- df_pca.cwm.scores.traits
+new_data.1 <- new_data.1[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data.1$Comp.1 <- seq(min(df_pca.cwm.scores.traits$Comp.1), 
+                       max(df_pca.cwm.scores.traits$Comp.1), length.out = 100)
+
+# Predict partial effect
+new_data.1$pred1 <- predict(model_weighted_volume, newdata = new_data.1, type = "response")
+
+################################Comp.1 vs volume fig ###############
+
+volume.pc.1.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.1, y = Volume_boxcox, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data.1, aes(x = Comp.1, y = pred1), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Volume_boxcox, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Volume_boxcox, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab(expression(bold("Volume (") ~ bold(mu) * bold(m^3) ~ bold(")"))) +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  + scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+# Create a new dataset for prediction Comp.2 vs volume
+new_data <- df_pca.cwm.scores.traits
+new_data <- new_data[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data$Comp.2 <- seq(min(df_pca.cwm.scores.traits$Comp.2), 
+                       max(df_pca.cwm.scores.traits$Comp.2), length.out = 100)
+
+# Predict partial effect
+new_data$pred <- predict(model_weighted_volume, newdata = new_data, type = "response")
+
+# Plot the partial effect with observed data points
+#############Comp.2 Volume fig ################
+
+volume.pc.2.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.2, y = Volume_boxcox, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data, aes(x = Comp.2, y = pred), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Volume_boxcox, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Volume_boxcox, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab(expression(bold("Volume (") ~ bold(mu) * bold(m^3) ~ bold(")"))) +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+############################################### volume spatial patterns 
+png("spatial_spore_volume.png", width = 1600, height = 1200, res = 300)
+
+vis.gam(model_weighted_volume,
+        view = c("Latitude_Decimal", "Longitude_Decimal"),
+        type = "response",
+        plot.type = "contour",
+        color = "topo",
+        main = "Spatial variation in predicted spore volume")
+
+dev.off()
+
+
+################################################### cwm ornamentation  #############################################
+# Apply Yeo-Johnson transformation and extract transformed values
+ornamentation_trans <- bestNormalize::yeojohnson(df_pca.cwm.scores.traits$Ornamentation)
+
+# Extract the transformed values (x.t) and assign to your data frame
+df_pca.cwm.scores.traits$Ornamentation_yeo <- ornamentation_trans$x.t
+
+# Check the histogram of the transformed data
+hist(df_pca.cwm.scores.traits$Ornamentation_yeo, 
+     main = "Yeo-Johnson Transformed Ornamentation", 
+     xlab = "Yeo-Johnson(Ornamentation)", 
+     col = "grey", 
+     border = "white")
+
+#Model
+# First, fit a preliminary model to obtain initial residuals
+model_initial_ornamentation <- mgcv::bam(Ornamentation_yeo ~ Comp.1 + Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 15),
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+
+# Calculate weights based on fitted values
+weights_var <- 1 / abs(fitted(model_initial_ornamentation)) 
+
+# Refit the model using variance weights
+model.cwm.ornamentation <- mgcv::bam(Ornamentation_yeo ~ Comp.1 + Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 15),
+  weights = weights_var,      # Add weights
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+summary(model.cwm.ornamentation)
+
+# Create a data frame with fitted values and residuals
+residuals_df <- data.frame(
+  Fitted_Values = fitted(model.cwm.ornamentation),
+  Residuals = residuals(model.cwm.ornamentation)
+)
+# Residuals vs. Fitted Values Plot (diagnostics)
+residuals_plot <- ggplot(residuals_df, aes(x = Fitted_Values, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values"
+  ) +
+  theme_minimal()
+
+# Histogram of Residuals Plot
+histogram_plot <- ggplot(residuals_df, aes(x = Residuals)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(
+    x = "Residuals",
+    y = "Frequency",
+    title = "Histogram of Residuals"
+  ) +
+  theme_minimal()
+
+# Combine the two plots side by side
+combined_plot.cwm.ornamentation <- residuals_plot + theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  ) + histogram_plot + plot_layout(ncol = 2)+ theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )
+
+####gam visualization 
+# Create a new dataset for prediction
+new_data.1 <- df_pca.cwm.scores.traits
+new_data.1 <- new_data.1[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data.1$Comp.1 <- seq(min(df_pca.cwm.scores.traits$Comp.1), 
+                       max(df_pca.cwm.scores.traits$Comp.1), length.out = 100)
+
+# Predict partial effect
+new_data.1$predorn <- predict(model.cwm.ornamentation, newdata = new_data.1, type = "response")
+
+################################Comp.1 vs ornamentation fig ###############
+
+Ornamentation.pc.1.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.1, y = Ornamentation_yeo, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data.1, aes(x = Comp.1, y = predorn), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Ornamentation_yeo, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Ornamentation_yeo, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab(expression(bold("Ornamentation (") * bold(mu) * bold("m)"))) +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+# Create a new dataset for prediction Comp.2 vs volume
+new_data <- df_pca.cwm.scores.traits
+new_data <- new_data[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data$Comp.2 <- seq(min(df_pca.cwm.scores.traits$Comp.2), 
+                       max(df_pca.cwm.scores.traits$Comp.2), length.out = 100)
+
+# Predict partial effect
+new_data$predorn2 <- predict(model.cwm.shape, newdata = new_data, type = "response")
+
+# Plot the partial effect with observed data points
+#############Comp.2 vs Ornamentation fig ################
+Ornamentation.pc.2.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.2, y = Ornamentation_yeo, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data, aes(x = Comp.2, y = predorn2), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Ornamentation_yeo, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Ornamentation_yeo, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab(expression(bold("Ornamentation (") * bold(mu) * bold("m)"))) +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm")) + scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+############################################### ornamentation spatial patterns 
+png("spatial_spore_ornamentation.png", width = 1600, height = 1200, res = 300)
+
+vis.gam(model.cwm.ornamentation,
+        view = c("Latitude_Decimal", "Longitude_Decimal"),
+        type = "response",
+        plot.type = "contour",
+        color = "topo",
+        main = "Spatial variation in predicted spore ornamentation")
+
+dev.off()
+
+
+
+##################################################### cwm investment  ###############################################
+df_pca.cwm.scores.traits$Investment=as.numeric(df_pca.cwm.scores.traits$Investment)
+hist(df_pca.cwm.scores.traits$Investment)
+#Yeo-Johnson transformation
+yeo_result <- yeojohnson(df_pca.cwm.scores.traits$Investment)
+df_pca.cwm.scores.traits$Investment_yeo <- yeo_result$x.t
+hist(df_pca.cwm.scores.traits$Investment_yeo)
+
+#Model
+# First, fit a preliminary model to obtain initial residuals
+model_initial_investment <- mgcv::bam(Investment_yeo ~ Comp.1 + Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 5),
+  method = "fREML",
+  data = df_pca.cwm.scores.traits)
+
+# Calculate weights based on fitted values
+weights_var <- 1 / abs(fitted(model_initial_investment))
+
+# Refit the model using variance weights
+model.cwm.investment <- mgcv::bam(Investment_yeo ~ Comp.1 + Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 5),
+  weights = weights_var,      # Add weights
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+
+summary(model.cwm.investment)
+
+# Create a data frame with fitted values and residuals
+residuals_df <- data.frame(
+  Fitted_Values = fitted(model.cwm.investment),
+  Residuals = residuals(model.cwm.investment)
+)
+# Residuals vs. Fitted Values Plot (diagnostic)
+residuals_plot <- ggplot(residuals_df, aes(x = Fitted_Values, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values"
+  ) +
+  theme_minimal()
+
+# Histogram of Residuals Plot
+histogram_plot <- ggplot(residuals_df, aes(x = Residuals)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(
+    x = "Residuals",
+    y = "Frequency",
+    title = "Histogram of Residuals"
+  ) +
+  theme_minimal()
+
+# Combine the two plots side by side
+combined_plot.cwm.investment <- residuals_plot + theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  ) + histogram_plot + plot_layout(ncol = 2)+ theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )
+
+
+####gam visualization investment
+# Create a new dataset for prediction
+new_data.1 <- df_pca.cwm.scores.traits
+new_data.1 <- new_data.1[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data.1$Comp.1 <- seq(min(df_pca.cwm.scores.traits$Comp.1), 
+                       max(df_pca.cwm.scores.traits$Comp.1), length.out = 100)
+
+# Predict partial effect
+new_data.1$predinvest <- predict(model.cwm.investment, newdata = new_data.1, type = "response")
+
+################################Comp.1 vs investment fig ###############
+Investment.pc.1.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.1, y = Investment_yeo, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data.1, aes(x = Comp.1, y = predinvest), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Investment_yeo, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Investment_yeo, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Investment") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+ 
+
+# Create a new dataset for prediction Comp.2 vs volume
+new_data <- df_pca.cwm.scores.traits
+new_data <- new_data[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data$Comp.2 <- seq(min(df_pca.cwm.scores.traits$Comp.2), 
+                       max(df_pca.cwm.scores.traits$Comp.2), length.out = 100)
+
+# Predict partial effect
+new_data$predinvest2 <- predict(model.cwm.investment, newdata = new_data, type = "response")
+
+# Plot the partial effect with observed data points
+#############Comp.2 vs Investment fig ################
+Investment.pc.2.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.2, y = Investment_yeo, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data, aes(x = Comp.2, y = predinvest2), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Investment_yeo, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Investment_yeo, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Investment") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+############################################### investment spatial patterns 
+png("spatial_spore_investment.png", width = 1600, height = 1200, res = 300)
+
+vis.gam(model.cwm.investment,
+        view = c("Latitude_Decimal", "Longitude_Decimal"),
+        type = "response",
+        plot.type = "contour",
+        color = "topo",
+        main = "Spatial variation in predicted spore
+        cell wall investment")
+
+dev.off()
+
+
+################################################## cwm color  #######################################################
+hist(df_pca.cwm.scores.traits$Color)
+# Apply Yeo-Johnson transformation
+yeo_result <- bestNormalize::yeojohnson(df_pca.cwm.scores.traits$Color)
+df_pca.cwm.scores.traits$Color_yeo <- yeo_result$x.t
+
+# Check the transformed distribution
+hist(df_pca.cwm.scores.traits$Color_yeo)
+
+#Model
+#First, fit a preliminary model to obtain initial residuals
+model_initial_color <- mgcv::bam(Color_yeo~ Comp.1+Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 15),
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+
+# Calculate weights based on fitted values
+weights_var <- 1 / abs(fitted(model_initial_color))
+
+
+# Refit the model using variance weights
+model.cwm.color <- mgcv::bam(Color_yeo ~ Comp.1+Comp.2  +
+    s(Biome, bs = "re") + s(marker, bs = "re") + 
+    s(sequencing_platform, bs = "re") + s(sample_type, bs = "re") +
+    s(year_of_sampling, bs = "cr") +
+    s(Latitude_Decimal, Longitude_Decimal, bs = "sos", k = 15),
+  weights = weights_var,      # Add weights
+  method = "fREML",
+  data = df_pca.cwm.scores.traits
+)
+
+summary(model.cwm.color)
+
+# Create a data frame with fitted values and residuals
+residuals_df <- data.frame(
+  Fitted_Values = fitted(model.cwm.color),
+  Residuals = residuals(model.cwm.color)
+)
+# Residuals vs. Fitted Values Plot (diagnostics)
+residuals_plot <- ggplot(residuals_df, aes(x = Fitted_Values, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values"
+  ) +
+  theme_minimal()
+
+# Histogram of Residuals Plot
+histogram_plot <- ggplot(residuals_df, aes(x = Residuals)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(
+    x = "Residuals",
+    y = "Frequency",
+    title = "Histogram of Residuals"
+  ) +
+  theme_minimal()
+
+# Combine the two plots side by side
+combined_plot.cwm.color <- residuals_plot + theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  ) + histogram_plot + plot_layout(ncol = 2)+ theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )
+
+
+
+####gam visualization Color
+# Create a new dataset for prediction
+new_data.1 <- df_pca.cwm.scores.traits
+new_data.1 <- new_data.1[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data.1$Comp.1 <- seq(min(df_pca.cwm.scores.traits$Comp.1), 
+                       max(df_pca.cwm.scores.traits$Comp.1), length.out = 100)
+
+# Predict partial effect
+new_data.1$predcolor <- predict(model.cwm.color, newdata = new_data.1, type = "response")
+
+################################Comp.1 vs color fig ###############
+Color.pc.1.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.1, y = Color_yeo, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data.1, aes(x = Comp.1, y = predcolor), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Color_yeo, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.1, y = Color_yeo, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Color") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  + scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+ 
+
+
+# Create a new dataset for prediction Comp.2 vs volume
+new_data <- df_pca.cwm.scores.traits
+new_data <- new_data[rep(1, 100), ]  # Replicate a row to hold other variables constant
+new_data$Comp.2 <- seq(min(df_pca.cwm.scores.traits$Comp.2), 
+                       max(df_pca.cwm.scores.traits$Comp.2), length.out = 100)
+
+# Predict partial effect
+new_data$predcolor2 <- predict(model.cwm.color, newdata = new_data, type = "response")
+
+# Plot the partial effect with observed data points
+#############Comp.2 vs Color fig ################
+Color.pc.2.cwm.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.cwm.scores.traits, 
+             aes(x = Comp.2, y = Color_yeo, fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = new_data, aes(x = Comp.2, y = predcolor2), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Color_yeo, fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.cwm.scores.traits, 
+              aes(x = Comp.2, y = Color_yeo, color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Color") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C"))  + scale_fill_manual(values = c("#8B008B","turquoise1","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+############################################### color spatial patterns 
+png("spatial_spore_color.png", width = 1600, height = 1200, res = 300)
+
+vis.gam(model.cwm.color,
+        view = c("Latitude_Decimal", "Longitude_Decimal"),
+        type = "response",
+        plot.type = "contour",
+        color = "topo",
+        main = "Spatial variation in predicted spore color")
+
+dev.off()
+
+
+###################Combine cwm abundance figures ########################################
+figure.volume <- ggarrange(volume.pc.1.cwm.fig  , volume.pc.2.cwm.fig + rremove("ylab"), # remove axis labels from plotslabels = NULL, 
+                    ncol = 2, nrow = 1, legend = "none", heights = c(0.25,0.25), widths = c(1.1, 1),
+                    font.label = list(size = 10, color = "black", face = "bold", family = NULL, position = "top"))
+
+ 
+figure.ornamentation <- ggarrange(Ornamentation.pc.1.cwm.fig , Ornamentation.pc.2.cwm.fig + rremove("ylab"), # remove axis labels from plots
+                    labels = NULL, 
+                    ncol = 2, nrow = 1, legend = "none", heights = c(1,1), widths = c(1.1,1),
+                    font.label = list(size = 10, color = "black", face = "bold", family = NULL, position = "top")) 
+
+figure.investment <- ggarrange(Investment.pc.1.cwm.fig , Investment.pc.2.cwm.fig + rremove("ylab"), # remove axis labels from plots
+                    labels = NULL, 
+                    ncol = 2, nrow = 1, legend = "none", heights = c(1,1), widths = c(1.1,1),
+                    font.label = list(size = 10, color = "black", face = "bold", family = NULL, position = "top")) 
+
+figure.shape <- ggarrange(Shape.pc.1.cwm.fig , Shape.pc.2.cwm.fig+ rremove("ylab"), # remove axis labels from plots
+                    labels = NULL, 
+                    ncol = 2, nrow = 1, legend = "none", heights = c(1,1), widths = c(1.1,1),
+                    font.label = list(size = 10, color = "black", face = "bold", family = NULL, position = "top")) 
+figure.color <- ggarrange(Color.pc.1.cwm.fig, Color.pc.2.cwm.fig + rremove("ylab"), # remove axis labels from plots
+                    labels = NULL, 
+                    ncol = 2, nrow = 1, common.legend=FALSE, legend = "none", heights = c(1.4,1.4), widths = c(1.1,1),
+                    font.label = list(size = 10, color = "black", face = "bold", family = NULL, position = "top"))
+
+
+ggsave("figure.volume.tiff",figure.volume, height =4, width = 11, units = "in", dpi = 300)
+ggsave("figure.ornamentation.tiff",figure.ornamentation, height =4, width = 11, units = "in", dpi = 300)
+ggsave("figure.investment.tiff",figure.investment, height =4, width = 11, units = "in", dpi = 300)
+ggsave("figure.shape.tiff",figure.shape, height =4, width = 11, units = "in", dpi = 300)
+ggsave("figure.color.tiff",figure.color, height =4, width = 11, units = "in", dpi = 300)
+
+
+################################
+#combine diagnostics plots
+combined_diagnostics_cwm <- ggarrange(combined_plot.cwm.volume, combined_plot.cwm.ornamentation, combined_plot.cwm.investment, combined_plot.cwm.shape, combined_plot.cwm.color, ncol = 1, labels = c("A)", "B)", "C)", "D)", "E)"))
+
+ggsave("diagnostics_cwm.tiff", combined_diagnostics_cwm, height =14, width = 14, units = "in", dpi = 300)
+
+
+```
+
