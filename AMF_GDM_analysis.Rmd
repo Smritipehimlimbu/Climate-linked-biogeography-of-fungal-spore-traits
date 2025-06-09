@@ -1,0 +1,210 @@
+---
+title: "AMF_GDM_analysis"
+author: "Smriti Pehim Limbu"
+date: "2025-04-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#package upload
+```{r}
+library(pacman)
+pacman::p_load(readr, dplyr, tidyverse, factoextra, MASS, mgcv, ggplot2, patchwork, ggpubr, MASS, bestNormalize, gdm)
+```
+#data upload
+```{r}
+df_metadata.biogeography.traits <- read_csv("df_metadata.biogeography.traits.csv")
+```
+
+###Figure 4: GDM meta data to calculate traits-beta diversity
+
+```{r}
+#GDM with abundance
+
+df_abundance.gdm <- df_metadata.biogeography.traits %>% filter(id!=1151) %>% filter(id<1433) %>% dplyr::select(-c( INVAM., Host, Climatic.Zone,primers, marker_size, plants_dominant))
+
+df_abundance.gdm2 <- na.omit(df_abundance.gdm)
+length(unique(df_abundance.gdm2$id))
+
+#trait
+df.1<- df_abundance.gdm2 %>% 
+  group_by(id) %>% 
+  filter(n_distinct(good.names) >5) %>%  # Keep only ids more than 5 unique good.names
+  ungroup()
+length(unique(df.1$id))
+
+
+df_traits.gdm <- df.1 %>% dplyr::select(id, vol_mean, orn_height_mean, investment_mean, shape_median, color_most) %>% group_by(id) %>% dplyr::summarize(Volume=mean(vol_mean, na.rm=TRUE), Ornamentation=mean(orn_height_mean, na.rm=TRUE), Investment=mean(investment_mean, na.rm=TRUE), Shape=mean(shape_median, na.rm=TRUE), Color=mean(color_most, na.rm=TRUE)) %>% unique() %>%  remove_rownames %>% column_to_rownames(var="id")%>% mutate_all(~replace(., is.nan(.), NA)) %>% ungroup()
+
+str(df_traits.gdm)
+
+traits.gdm <- scale(df_traits.gdm, center=TRUE, scale=TRUE)
+df_traits<- as.matrix(traits.gdm)
+str(df_traits)
+
+
+#Calculate trait distance
+functional_dist <- as.matrix(dist(df_traits, method = "euclidean"))
+
+site <- unique(df.1$id)
+df_functional_matrix <- cbind(site, functional_dist)
+
+#Environmental table
+colnames(df.1)
+env_data <- df.1 %>% dplyr::select(id, MAT, MAP, soil.pH, mean_annual_wind, Prec.seasonality.worldclim, Longitude_Decimal, Latitude_Decimal) %>% group_by(id) %>% dplyr::summarize(MAT=mean(MAT, na.rm=TRUE), MAP=mean(MAP, na.rm=TRUE), pH=mean(soil.pH, na.rm=TRUE), mean_annual_wind=mean(mean_annual_wind, na.rm=TRUE), Prec.seasonality.worldclim=mean(Prec.seasonality.worldclim, na.rm=TRUE), Longitude_Decimal=mean(Longitude_Decimal), Latitude_Decimal=mean(Latitude_Decimal))
+env_data <- env_data %>% rename("site"="id")
+env_df <- as.data.frame(env_data)
+
+# now format the table for gdm analysis
+gdm_site_pair <- formatsitepair(df_functional_matrix, 3, XColumn="Longitude_Decimal", YColumn="Latitude_Decimal", predData=env_df, siteColumn="site")
+
+# response variable is  "distance"
+gdm_site_pair$distance <- gdm_site_pair$distance / max(gdm_site_pair$distance, na.rm = TRUE)
+
+# Check if all values are now in the range [0, 1]
+summary(gdm_site_pair$distance)
+
+gdm.1 <- gdm(data=gdm_site_pair)
+
+summary(gdm.1)
+length(gdm.1$predictors) # get ideal of number of panels
+print(gdm.1$predictors)
+plot(gdm.1, plot.layout=c(3,3))
+
+png("GDM_Publication_Figure.png", width = 3000, height = 2000, res = 300) 
+plot(gdm.1, plot.layout = c(3, 3))
+dev.off()
+
+
+# Extract observed and predicted values from GDM:
+obs_pred_data <- data.frame(
+  Predicted = gdm.1$observed,  # Replace with actual predicted data
+  Observed = gdm.1$predicted   # Replace with actual observed data
+)
+
+# Create scatter plot
+gdm.traitsdistance.env.dissimilarity <- ggplot(obs_pred_data, aes(x = Predicted, y = Observed)) +
+  geom_point(color = "#7209B7", alpha = 0.6, size = 2) +   # Points
+  geom_smooth(method = "lm", color = "black", linetype = "dashed", se = FALSE) +  # Fit line
+  labs(
+    title = "Predicted Distance vs. Observed Dissimilarity",
+    x = "Predicted Trait Distance",
+    y = "Environmental Dissimilarity"
+  ) +
+  theme_minimal(base_size = 18) +  # Minimal theme for clean look
+  theme(
+    plot.title = element_text(hjust = 0.5,size = 20, face = "bold", vjust = 1),
+    axis.title = element_text(size = 18, face="bold"),
+    axis.text = element_text(size = 14, face="bold"), panel.grid = element_blank(), panel.border = element_rect(color = "black", fill = NA, size = 1.2)
+  )
+
+# Save the plot
+ggsave("gdm.traitsdistance.env.dissimilarity.png", gdm.traitsdistance.env.dissimilarity, width = 8, height = 6, dpi = 300)
+
+#extracting values for plotting other gdm plots
+gdm.1.splineDat <- isplineExtract(gdm.1)
+str(gdm.1.splineDat)
+
+#MAT
+png("plot.gdm.MAT.new.png")
+# Set larger margins to avoid cutting off labels
+par(mar = c(5, 6, 4, 2) + 0.1)  # (bottom, left, top, right)
+plot(gdm.1.splineDat$x[,"MAT"], 
+     gdm.1.splineDat$y[,"MAT"], 
+     lwd=5,
+     type="l",
+     col = "#7209B7",
+     xlab=expression(bold("Mean Annual Temperature ("*degree*C*")")), 
+     ylab=expression(bold("Partial Trait Distance")),
+     main=expression(bold("GDM Spline for Mean Annual Temperature")),
+     cex.lab = 1.5,    # Increase label size
+     cex.axis = 1.5, # Increase axis tick size
+     cex.main = 1.8)
+
+dev.off()
+
+#MAP
+png("plot.gdm.MAP.new.png")
+# Set larger margins to avoid cutting off labels
+par(mar = c(5, 6, 4, 2) + 0.1)  # (bottom, left, top, right)
+plot(gdm.1.splineDat$x[,"MAP"], 
+     gdm.1.splineDat$y[,"MAP"], 
+     lwd=5,
+     type="l",
+     col = "#7209B7",
+     xlab=expression(bold("Mean Annual Precipitation(mm)")), 
+     ylab=expression(bold("Partial Trait Distance")),
+     main=expression(bold("GDM Spline for Mean Annual Precipitation")),
+     cex.lab = 1.5,    # Increase label size
+     cex.axis = 1.5, # Increase axis tick size
+     cex.main = 1.8)
+
+dev.off()
+
+#pH
+png("plot.gdm.pH.new.png")
+# Set larger margins to avoid cutting off labels
+par(mar = c(5, 6, 4, 2) + 0.1)  # (bottom, left, top, right)
+plot(gdm.1.splineDat$x[,"pH"], 
+     gdm.1.splineDat$y[,"pH"], 
+     lwd=5,
+     type="l",
+     col = "#7209B7",
+     xlab=expression(bold("Soil pH")), 
+     ylab=expression(bold("Partial Trait Distance")),
+     main=expression(bold("GDM Spline for Soil pH")),
+     cex.lab = 1.5,    # Increase label size
+     cex.axis = 1.5, # Increase axis tick size
+     cex.main = 1.8)
+
+dev.off()
+
+#Prec.seasonality.worldclim
+png("plot.gdm.prec.seasonality.worldclim.new.png")
+# Set larger margins to avoid cutting off labels
+par(mar = c(5, 6, 4, 2) + 0.1)  # (bottom, left, top, right)
+plot(gdm.1.splineDat$x[,"Prec.seasonality.worldclim"], 
+     gdm.1.splineDat$y[,"Prec.seasonality.worldclim"], 
+     lwd=5,
+     type="l",
+     col = "#7209B7",
+     xlab=expression(bold("Precipitation Seasonality (%)")), 
+     ylab=expression(bold("Partial Trait Distance")),
+     main=expression(bold("GDM Spline for Precipitation Seasonality")),
+     cex.lab = 1.5,    # Increase label size
+     cex.axis = 1.5, # Increase axis tick size
+     cex.main = 1.8)
+
+dev.off()
+
+#Observed vs predicted compositional dissimilarity
+obs_pred_data <- data.frame(
+  Predicted = gdm.1$ecological,  # Replace with actual predicted data
+  Observed = gdm.1$observed   # Replace with actual observed data
+)
+
+# Create scatter plot
+gdm.dissimilarity <- ggplot(obs_pred_data, aes(x = Predicted, y = Observed)) +
+  geom_point(color = "#7209B7", alpha = 0.6, size = 2) +   # Points
+  geom_smooth(method = "lm", color = "black", linetype = "dashed", se = FALSE) +  # Fit line
+  labs(
+    title = "Predicted vs. Observed Dissimilarity",
+    x = "Predicted Dissimilarity",
+    y = "Observed Dissimilarity"
+  ) +
+  theme_minimal(base_size = 18) +  # Minimal theme for clean look
+  theme(
+    plot.title = element_text(hjust = 0.5,size = 20, face = "bold", vjust = 1),
+    axis.title = element_text(size = 18, face="bold"),
+    axis.text = element_text(size = 14, face="bold"), panel.grid = element_blank(), panel.border = element_rect(color = "black", fill = NA, size = 1.2)
+  )
+
+# Save the plot
+ggsave("dissimilarity.png", gdm.dissimilarity, width = 8, height = 6, dpi = 300)
+
+```
+
+
