@@ -1,0 +1,322 @@
+---
+title: "Range_size"
+author: "Smriti Pehim Limbu"
+date: "2025-04-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#package upload
+
+```{r}
+library(pacman)
+p_load(readr, dplyr, tidyverse, factoextra, MASS, mgcv, ggplot2, patchwork, ggpubr, MASS, bestNormalize, sf, letsR, terra, randomForest, corrplot, pdp, plotly)
+```
+#data upload
+
+```{r}
+df_metadata.biogeography.traits <- read_csv("df_metadata.biogeography.traits.csv")
+```
+
+```{r}
+#Have a presenceabsence object
+df_range <- df_metadata.biogeography.traits %>% dplyr::select(id, Longitude_Decimal, Latitude_Decimal, good.names) %>% mutate(presence=1) 
+
+# Convert the data frame to an sf object
+sf_data <- st_as_sf(df_range,coords = c("Longitude_Decimal", "Latitude_Decimal"), crs = 4326)
+str(sf_data)
+
+#since letsR package only takes polygon with minimum 4 points
+ sf_filtered <- sf_data%>% group_by(good.names) %>% filter(n()>5)
+# Group by 'good.names' and create polygons
+sf_polygons <- sf_filtered %>% dplyr::group_by(good.names) %>% 
+  dplyr::summarise() %>%
+  st_cast("POLYGON")
+
+#change column names of the sf data to use letsR package
+sf_presence.absence <- sf_polygons %>% rename(binomial = good.names) %>% mutate(presence=1) %>% mutate(origin=1) %>% mutate(seasonal=1) %>% dplyr::select(binomial, presence, origin, seasonal, geometry)
+
+str(sf_presence.absence)
+
+sf_presence.absence$binomial=as.factor(sf_presence.absence$binomial)
+sf_presence.absence$presence=as.integer(sf_presence.absence$presence)
+sf_presence.absence$origin=as.integer(sf_presence.absence$origin)
+sf_presence.absence$seasonal=as.integer(sf_presence.absence$seasonal)
+
+
+a <- as.data.frame(sf_presence.absence)
+b <- st_as_sf(a)
+str(b)
+
+#Calculate rangesize using letsR package
+
+rangesize<- lets.rangesize(x = b,coordinates = "geographic")
+rangesize
+
+df_rangesize <- rownames_to_column(as.data.frame(rangesize), var = "RowName")
+
+df_rangesize <- df_rangesize %>% rename(good.names=RowName)
+
+#merge with traits
+df_rangesize.traits <- merge(df_rangesize, df_metadata.biogeography.traits.one.id.removed, by="good.names", all.x=TRUE)
+
+###################################random forest range size
+colnames(df_rangesize.traits.functional.diversity)
+
+# Remove rows with missing values
+df_clean <- df_rangesize.traits %>% dplyr::select(id,Range_size, vol_mean, orn_height_mean, investment_mean, shape_median, color_most, MAT, MAP, soil.pH, Prec.seasonality.worldclim, mean_annual_wind, Longitude_Decimal, Latitude_Decimal) %>% na.omit()
+
+length(unique(df_clean$id))#1,574
+
+#randomforest
+rf_model <- randomForest(Range_size~ vol_mean + orn_height_mean + investment_mean + shape_median +color_most + MAT + MAP + soil.pH + mean_annual_wind + Prec.seasonality.worldclim , data = df_clean, importance = TRUE)
+print(rf_model)
+
+# Plot variable importance
+varImpPlot(rf_model, main = "Variable Importance")
+
+
+# Extract variable importance
+var_imp <- importance(rf_model)
+
+var_imp_df <- data.frame(Variable = rownames(var_imp), Importance = var_imp[, 1])
+
+# Order the variables by importance
+var_imp_df <- var_imp_df[order(var_imp_df$Importance, decreasing = TRUE), ]
+
+# Plotting the variable importance
+
+# change names
+var_imp_df$Variable <- factor(var_imp_df$Variable, levels = var_imp_df$Variable, 
+                               labels = c("Investment", "Volume",  
+                                          "Shape", "Ornamentation", "Color", "Mean Annual Temperature","Precipitation Seasonality","Soil pH", "Mean Annual Precipitation",
+                                          "Mean Annual Wind"))
+
+
+unique_colors <- c(
+  "Investment" = "#E69F00",        # Orange
+  "Volume" = "#56B4E9", # Sky Blue
+  "Shape" = "#009E73",    # Green
+  "Ornamentation" = "#F0E442",         # Yellow
+  "Color" = "#0072B2",         # Blue
+  "Mean Annual Temperature" = "#D55E00", # Vermilion
+  "Precipitation Seasonality" = "#CC79A7", # Reddish Purple
+  "Soil pH" = "#999999",             # Grey
+  "Mean Annual Precipitation" = "#000000",   # Black
+  "Mean Annual Wind" = "orchid"# Orange (reused if needed)
+)
+
+# plot
+importance_plot <- ggplot(var_imp_df, aes(x = Importance, y = reorder(Variable, Importance), fill = Variable)) +
+  geom_bar(stat = "identity", width = 0.7) +  # Adjust bar width for aesthetic spacing
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Mean Decrease in Accuracy",
+    y = "Predictor Variables"
+  ) +
+  scale_fill_manual(values = unique_colors) +  # Use custom color palette
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),  # Centered and bold title
+    axis.title.x = element_text(size = 18, face = "bold"),             # Bold axis titles
+    axis.title.y = element_text(size = 18, face = "bold"),
+    axis.text.x = element_text(size = 18, face = "bold"),                            # Readable axis text
+    axis.text.y = element_text(size = 18, face= "bold"),
+    legend.position = "none",                                         # Remove legend to reduce clutter
+    panel.grid.minor = element_blank(),                               # Remove minor grid lines
+    panel.grid.major.y = element_line(size = 0.5, linetype = "dotted", color = "black"),  # Subtle grid
+    panel.border = element_blank(),
+    panel.background = element_blank() 
+  ) +
+  scale_x_continuous(expand = c(0, 0)) +  # Remove extra spacing on x-axis
+  scale_y_discrete(expand = c(0.01, 0))   # Adjust spacing for y-axis
+
+
+# Save the plot for publication
+ggsave("Random_Forest_Importance_Plot.png", importance_plot, width = 10, height = 8)
+
+##########check for correlation
+predictors <- df_clean[, c("vol_mean", "orn_height_mean", "investment_mean", 
+                           "shape_median", "color_most", "MAT", "MAP", 
+                           "soil.pH", "mean_annual_wind", "Prec.seasonality.worldclim")]
+
+# Compute correlation matrix
+cor_matrix <- cor(predictors, use = "complete.obs")  # Use 'complete.obs' to handle missing values
+
+# Visualize correlation matrix
+corrplot(cor_matrix, method = "color", type = "upper", tl.col = "black", tl.srt = 45)
+###high correlation in  MAT and Precipitation seasonality
+
+####################Partial dependence plots
+#investment
+partial_investment <- partial(rf_model, pred.var = "investment_mean", train = df_clean)
+
+# Plot using ggplot2
+random_investment <- ggplot(partial_investment, aes(x = investment_mean, y = yhat)) +
+  geom_line(color = "#E69F00", size = 1.5) +  # Use a colorblind-friendly blue
+  geom_ribbon(aes(ymin = yhat - 1.96 * sd(yhat), ymax = yhat + 1.96 * sd(yhat)), 
+              alpha = 0.2, fill = "#E69F00") +  # Add confidence band
+  labs(
+    x = "Investment",
+    y = "Predicted Range Size (km²)"
+  ) + 
+  theme_minimal(base_size = 14) +  # Increase font size for readability
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),  # Center and bold title
+    axis.title = element_text(size = 14, face = "bold"),               # Bold axis titles
+    axis.text = element_text(size = 12, face = "bold"),                              # Adjust axis text size
+    panel.grid.minor = element_blank(),                               # Remove minor gridlines
+    panel.grid.major = element_blank(), # Subtle gridlines
+    panel.border = element_rect(color = "black", fill = NA, size = 1.2)  # Add border for clarity
+  )
+
+#volume
+partial_volume <- partial(rf_model, pred.var = "vol_mean", train = df_clean)
+
+random_vol <- ggplot(partial_volume, aes(x = vol_mean, y = yhat)) +
+  geom_line(color = "#56B4E9", size = 1.5) +  # Use a colorblind-friendly blue
+  geom_ribbon(aes(ymin = yhat - 1.96 * sd(yhat), ymax = yhat + 1.96 * sd(yhat)), 
+              alpha = 0.2, fill = "#56B4E9") +  # Add confidence band
+  labs(
+    y = "Predicted Range Size (km²)"
+  ) + xlab(expression(bold("Volume (") ~ bold(mu) * bold(m^3) ~ bold(")")))+ 
+  theme_minimal(base_size = 14) +  # Increase font size for readability
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),  # Center and bold title
+    axis.title = element_text(size = 14, face = "bold"),               # Bold axis titles
+    axis.text = element_text(size = 12, face= "bold"),                              # Adjust axis text size
+    panel.grid.minor = element_blank(),                               # Remove minor gridlines
+    panel.grid.major = element_blank(), # Subtle gridlines
+    panel.border = element_rect(color = "black", fill = NA, size = 1.2)  # Add border for clarity
+  )
+
+# shape
+partial_shape <- partial(rf_model, pred.var = "shape_median", train = df_clean)
+
+# Plot using ggplot2
+random_shape <- ggplot(partial_shape, aes(x = shape_median, y = yhat)) +
+  geom_line(color = "#009E73", size = 1.5) +  # Use a colorblind-friendly blue
+  geom_ribbon(aes(ymin = yhat - 1.96 * sd(yhat), ymax = yhat + 1.96 * sd(yhat)), 
+              alpha = 0.2, fill = "#009E73") +  # Add confidence band
+  labs(
+    y = "Predicted Range Size (km²)",
+    x = "Shape"
+  ) + 
+  theme_minimal(base_size = 14) +  # Increase font size for readability
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),  # Center and bold title
+    axis.title = element_text(size = 14, face = "bold"),               # Bold axis titles
+    axis.text = element_text(size = 12, face = "bold"),                              # Adjust axis text size
+    panel.grid.minor = element_blank(),                               # Remove minor gridlines
+    panel.grid.major = element_blank(), # Subtle gridlines
+    panel.border = element_rect(color = "black", fill = NA, size = 1.2)  # Add border for clarity
+  )
+
+
+# Ornamentation
+partial_ornamentation <- partial(rf_model, pred.var = "orn_height_mean", train = df_clean)
+
+random_ornamentation <- ggplot(partial_ornamentation, aes(x = orn_height_mean, y = yhat)) +
+  geom_line(color = "#F0E442", size = 1.5) +  # Use a colorblind-friendly blue
+  geom_ribbon(aes(ymin = yhat - 1.96 * sd(yhat), ymax = yhat + 1.96 * sd(yhat)), 
+              alpha = 0.2, fill = "#F0E442") +  # Add confidence band
+  labs(
+    y = "Predicted Range Size (km²)",
+  ) + xlab(expression(bold("Ornamentation (") * bold(mu) * bold("m)"))) +
+  theme_minimal(base_size = 14) +  # Increase font size for readability
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),  # Center and bold title
+    axis.title = element_text(size = 14, face = "bold"),               # Bold axis titles
+    axis.text = element_text(size = 12, face = "bold"),                              # Adjust axis text size
+    panel.grid.minor = element_blank(),                               # Remove minor gridlines
+    panel.grid.major = element_blank(), # Subtle gridlines
+    panel.border = element_rect(color = "black", fill = NA, size = 1.2)  # Add border for clarity
+  )
+
+
+# color
+partial_color <- partial(rf_model, pred.var = "color_most", train = df_clean)
+
+random_color <- ggplot(partial_color, aes(x = color_most, y = yhat)) +
+  geom_line(color = "#0072B2", size = 1.5) +  # Use a colorblind-friendly blue
+  geom_ribbon(aes(ymin = yhat - 1.96 * sd(yhat), ymax = yhat + 1.96 * sd(yhat)), 
+              alpha = 0.2, fill = "#0072B2") +  # Add confidence band
+  labs(
+    y = "Predicted Range Size (km²)",
+    x = "Color"
+  ) + 
+  theme_minimal(base_size = 14) +  # Increase font size for readability
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),  # Center and bold title
+    axis.title = element_text(size = 14, face = "bold"),               # Bold axis titles
+    axis.text = element_text(size = 12, face = "bold"),                              # Adjust axis text size
+    panel.grid.minor = element_blank(),                               # Remove minor gridlines
+    panel.grid.major = element_blank(), # Subtle gridlines
+    panel.border = element_rect(color = "black", fill = NA, size = 1.2)  # Add border for clarity
+  )
+
+
+#MAT and prec.seasonality interaction plot
+partial_dep <- partial(
+  object = rf_model,
+  pred.var = c("MAT", "Prec.seasonality.worldclim"),
+  train = df_clean,
+  grid.resolution = 50  # Higher resolution for smoother plots
+)
+
+# Convert partial dependence data to a matrix 
+partial_matrix <- reshape2::acast(
+  partial_dep, 
+  MAT ~ Prec.seasonality.worldclim, 
+  value.var = "yhat"
+)
+
+# plot
+plot_3d <- plot_ly(
+  x = unique(partial_dep$Prec.seasonality.worldclim),
+  y = unique(partial_dep$MAT),
+  z = partial_matrix,
+  type = "surface",
+  colorscale = "grey"  # Custom grey to dark grey color scale
+) %>%
+  layout(
+    title = "3D Partial Dependence Plot",
+    scene = list(
+      xaxis = list(
+        title = "Precipitation seasonality",
+        titlefont = list(size = 18),  # Increase font size for x-axis label
+        tickfont = list(size = 14)    # Increase font size for x-axis ticks
+      ),
+      yaxis = list(
+        title = "MAT",
+        titlefont = list(size = 18),  # Increase font size for y-axis label
+        tickfont = list(size = 14)    # Increase font size for y-axis ticks
+      ),
+      zaxis = list(
+        title = "Partial Dependence (Range Size)",
+        titlefont = list(size = 18),  # Increase font size for z-axis label
+        tickfont = list(size = 14)    # Increase font size for z-axis ticks
+      )
+    )
+  )
+
+plot_3d
+
+# Save as HTML(interactive)
+htmlwidgets::saveWidget(as_widget(plot_3d), "3D_Partial_Dependence_Plot.html")
+
+orca(plot_3d, "3D_Partial_Dependence_Plot.png")
+
+
+
+######################combine range size figures ##################
+range_size_combined <- ggarrange(random_investment, random_vol, random_shape, random_ornamentation, random_color, random_color, nrow =2 , ncol = 3)
+
+
+ggsave("range_size_combined.png", range_size_combined, width = 18, height = 14, dpi = 300)
+
+ggsave("importance_plot.png", importance_plot, width = 9, height = 10, dpi = 300)
+
+
+```
