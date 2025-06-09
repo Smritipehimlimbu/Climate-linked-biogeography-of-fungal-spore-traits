@@ -1,0 +1,231 @@
+---
+title: "AMF_phylogeny"
+author: "Smriti Pehim Limbu"
+date: "2025-04-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#package upload
+
+```{r}
+library(pacman)
+p_load(readr, dplyr, tidyverse, factoextra, MASS, mgcv, ggplot2, patchwork, ggpubr,phytools, ape, caper, geiger, phylolm, picane)
+```
+#data upload
+
+```{r}
+df_metadata.biogeography.traits <- read_csv("df_metadata.biogeography.traits.csv")
+#phylogeny tree from TraitAM paper
+phylogeny.file <- read.nexus(file = "DataRecord_7_FinalTree_Oct2023.tre")
+print(phylogeny.file)
+unique(phylogeny.file$tip.label)
+```
+
+## Phylogeny
+
+```{r}
+df_traits.phylogeny <- df_metadata.biogeography.traits %>% filter(id!=1151) %>% dplyr::select(good.names, vol_mean, orn_height_mean, investment_mean, shape_median, color_most) %>% group_by(good.names) %>% dplyr::summarize(Volume=mean(vol_mean, na.rm=TRUE), Ornamentation=mean(orn_height_mean, na.rm=TRUE), Investment=mean(investment_mean, na.rm=TRUE), Shape=mean(shape_median, na.rm=TRUE), Color=mean(color_most, na.rm=TRUE)) %>% unique() %>%  remove_rownames %>% column_to_rownames(var="good.names")%>% mutate_all(~replace(., is.nan(.), NA)) %>% ungroup()
+
+# Extract first and second names, then combine them with a space
+phylogeny.file$tip.label<- gsub("(^[A-Za-z]+)_([a-z]+).*", "\\1 \\2", phylogeny.file$tip.label)
+unique(phylogeny.file$tip.label)
+
+
+
+#change Cetraspora armeniaca to Scutellospora armeniaca
+phylogeny.file$tip.label <- gsub("^Cetraspora armeniaca$", "Scutellospora armeniaca", phylogeny.file$tip.label)
+
+
+#change  Cetraspora gilmorei to Scutellospora gilmorei
+phylogeny.file$tip.label <- gsub("^Cetraspora gilmorei$", "Scutellospora gilmorei", phylogeny.file$tip.label)
+
+
+#change  Cetraspora nodosa to Scutellospora nodosa
+phylogeny.file$tip.label <- gsub("^Cetraspora nodosa$", "Scutellospora nodosa", phylogeny.file$tip.label)
+
+
+#change Cetraspora pellucida to Scutellospora pellucida
+phylogeny.file$tip.label <- gsub("^Cetraspora pellucida$", "Scutellospora pellucida", phylogeny.file$tip.label)
+
+#change  Entrophospora candida to Entrophospora candidum
+phylogeny.file$tip.label <- gsub("^Entrophospora candida$", "Entrophospora candidum", phylogeny.file$tip.label)
+
+#change  Entrophospora claroidea to Entrophospora claroideum
+phylogeny.file$tip.label <- gsub("^Entrophospora claroidea$", "Entrophospora claroideum", phylogeny.file$tip.label)
+
+#change  Entrophospora etunicata to 
+phylogeny.file$tip.label <- gsub("^Entrophospora etunicata$", "Entrophospora etunicatum", phylogeny.file$tip.label)
+
+#change  Entrophospora lamellosa
+phylogeny.file$tip.label <- gsub("^Entrophospora lamellosa$", "Entrophospora lamellosum", phylogeny.file$tip.label)
+
+#change  	Entrophospora lutea
+phylogeny.file$tip.label <- gsub("Entrophospora lutea$", "Entrophospora luteum", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Funneliformis caledonius$", "Funneliformis caledonium", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Funneliformis coronatus$", "Funneliformis coronatum", phylogeny.file$tip.label)
+
+
+#change  
+phylogeny.file$tip.label <- gsub("^Funneliformis fragilistratum$", "Funneliformis fragilistratus", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Funneliglomus sanmartinense$", "Funneliglomus sanmartinensis", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Glomus aggregatum$", "Rhizophagus aggregatus", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Glomus_Diversispora_versiforme_FN547681 NA$", "Glomus versiforme", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Paraglomus boliviana$", "Paraglomus bolivianum", phylogeny.file$tip.label)
+
+
+#change  
+phylogeny.file$tip.label <- gsub("^Redeckera megalocarpum$", "Redeckera megalocarpa", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Rhizophagus silesianus$", "Rhizophagus silesianum", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Sclerocystis_Glomus_sinuosa_MT832185 NA$", "Sclerocystis sinuosa", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Silvaspora_Rhizophagus_neocaledonica_KY362436 NA$", "Silvaspora neocaledonica", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Glomus_Diversispora_versiforme_FN547681", "Glomus versiforme", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Silvaspora_Rhizophagus_neocaledonica_KY362436" , "Silvaspora neocaledonica", phylogeny.file$tip.label)
+
+#change  
+phylogeny.file$tip.label <- gsub("^Sclerocystis_Glomus_sinuosa_MT832185", "Sclerocystis sinuosa", phylogeny.file$tip.label)
+
+# Get unique values
+df_metadata.biogeography.traits.one.id.removed <- df_metadata.biogeography.traits %>% filter(id!=1151)
+unique_tips <- unique(phylogeny.file$tip.label)
+unique_names <- unique(df_metadata.biogeography.traits.one.id.removed$good.names)
+
+# Convert to data frames for merging
+df_tips <- data.frame(Species = unique_tips, In_Tips = unique_tips, stringsAsFactors = FALSE)
+df_names <- data.frame(Species = unique_names, In_Names = unique_names, stringsAsFactors = FALSE)
+
+# Merging the data frames using full join to keep all species
+merged_df <- merge(df_tips, df_names, by = "Species", all = TRUE)
+View(merged_df)
+unique(phylogeny.file$tip.label)
+
+
+# Check if names now match between traits and tree
+matched_species <- intersect(rownames(df_traits.phylogeny), phylogeny.file$tip.label)
+df_matched_species <- as.data.frame(matched_species)
+
+# Print matched species to check
+head(matched_species)
+
+# Subset the traits and phylogenetic tree to matching species
+traits_data_subset <- df_traits.phylogeny[matched_species, ]
+phylogeny_tree_subset <- drop.tip(phylogeny.file, setdiff(phylogeny.file$tip.label, matched_species))
+# Check species names in the traits data
+head(rownames(df_traits.phylogeny))
+
+# Check species names in the phylogenetic tree
+head(phylogeny.file$tip.label)
+
+
+# Calculate Pagel's lambda for each trait
+lambda_volume <- phylosig(phylogeny_tree_subset, traits_data_subset$Volume, method = "lambda")
+lambda_ornamentation <- phylosig(phylogeny_tree_subset, traits_data_subset$Ornamentation, method = "lambda")
+lambda_investment <- phylosig(phylogeny_tree_subset, traits_data_subset$Investment, method = "lambda")
+lambda_shape <- phylosig(phylogeny_tree_subset, traits_data_subset$Shape, method = "lambda")
+lambda_color <- phylosig(phylogeny_tree_subset, traits_data_subset$Color, method = "lambda")
+print(lambda_volume)
+print(lambda_ornamentation)
+print(lambda_investment)
+print(lambda_shape)
+print(lambda_color)
+
+
+# Extract the actual lambda value from the list
+cat("Pagel's lambda for Volume: ", lambda_volume$lambda, "\n")
+cat("Pagel's lambda for Ornamentation: ", lambda_ornamentation$lambda, "\n")
+cat("Pagel's lambda for Investment: ", lambda_investment$lambda, "\n")
+cat("Pagel's lambda for Shape: ", lambda_shape$lambda, "\n")
+cat("Pagel's lambda for Color: ", lambda_color$lambda, "\n")
+
+# 
+lambda_values <- c(lambda_volume$lambda, 
+                   lambda_ornamentation$lambda, 
+                   lambda_investment$lambda, 
+                   lambda_shape$lambda, 
+                   lambda_color$lambda)
+
+# Corresponding trait names
+traits <- c("Volume", "Ornamentation", "Investment", "Shape", "Color")
+
+# data frame
+lambda_df <- data.frame(Trait = traits, Lambda = lambda_values)
+
+#plotting lambda
+ggplot(lambda_df, aes(x = Trait, y = Lambda)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  ylab("Pagel's Lambda") +
+  ggtitle("Phylogenetic Signal (Pagel's Lambda) Across Traits")
+
+
+####################phylogenetic tree with trait heatmap ####################################
+
+# Prepare the data
+trait_matrix <- as.matrix(traits_data_subset[, c("Volume", "Ornamentation", "Investment", "Shape", "Color")])
+rownames(trait_matrix) <- rownames(traits_data_subset)  # Ensure species names are in the rownames
+
+# Update rownames to have the first name (genus) in uppercase and the second name (species) in lowercase
+rownames(trait_matrix) <- sapply(rownames(traits_data_subset), function(x) {
+  name_parts <- unlist(strsplit(trimws(x), " ")) 
+  if (length(name_parts) > 1) {
+    paste0(
+      toupper(substring(name_parts[1], 1, 1)), # Uppercase first letter of genus
+      substring(name_parts[1], 2),            # Remaining letters of genus
+      " ",                                    
+      tolower(name_parts[2])                  
+    )
+  } else {
+    trimws(x)
+  }
+})
+
+# Update tip labels to have the first name capitalized and the second name lowercase
+phylogeny_tree_subset$tip.label <- sapply(phylogeny_tree_subset$tip.label, function(x) {
+  name_parts <- unlist(strsplit(x, " "))
+  if (length(name_parts) == 2) {
+    paste0(toupper(substring(name_parts[1], 1, 1)), 
+           tolower(substring(name_parts[1], 2)), 
+           " ", 
+           tolower(name_parts[2]))
+  } else {
+    x # Return unchanged if not two parts
+  }
+})
+
+unique(phylogeny_tree$tip.label)
+
+
+png(filename = "phylo_trait_heatmap_final.png", width = 5000, height = 8000, res = 300)
+# Plot the tree and the heatmap of traits side by side
+phylo.heatmap(phylogeny_tree_subset, trait_matrix, fsize =0.8, split= c(0.6, 0.5), ftype ="i", lwd=6,standardize = TRUE, legend=TRUE)
+
+# Customize the plot further
+title(main = "Phylogenetic heatmap of AM fungal spore traits", cex.main = 1.5)  # Add title
+
+dev.off()
+
+```
