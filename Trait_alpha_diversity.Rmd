@@ -1,0 +1,1069 @@
+---
+title: "Trait alpha diversity"
+author: "Smriti Pehim Limbu"
+date: "2025-04-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##package upload
+```{r}
+library(pacman)
+p_load(readr, tidyr,dplyr, tidyverse, factoextra, MASS, mgcv, ggplot2, patchwork, ggpubr, MASS, bestNormalize, fundiversity, Matrix)
+```
+
+#data upload
+```{r}
+df_metadata.biogeography.traits <- read_csv("df_metadata.biogeography.traits.csv")
+```
+#Figure 3: Functional diversity
+
+```{r}
+
+df_abundance.fundiversity <- df_metadata.biogeography.traits %>% filter(id!=1151) %>% filter(id<1433) %>% dplyr::select(-c( INVAM., Host, Climatic.Zone,primers, marker_size, plants_dominant))
+
+df_fundiversity <- na.omit(df_abundance.fundiversity)
+
+length(unique(df_fundiversity$id))
+
+#trait
+df.2 <- df_fundiversity %>% 
+  group_by(id) %>% 
+  filter(n_distinct(good.names) >5) %>%  # Keep only ids more than 5 unique good.names
+  ungroup()
+colnames(df.2)
+length(unique(df.2$id))
+
+
+df_traits.fundiversity <- df.2 %>% dplyr::select(good.names, vol_mean, orn_height_mean, investment_mean, shape_median, color_most) %>% group_by(good.names) %>% dplyr::summarize(Volume=mean(vol_mean, na.rm=TRUE), Ornamentation=mean(orn_height_mean, na.rm=TRUE), Investment=mean(investment_mean, na.rm=TRUE), Shape=mean(shape_median, na.rm=TRUE), Color=mean(color_most, na.rm=TRUE)) %>% unique() %>%  remove_rownames %>% column_to_rownames(var="good.names")%>% mutate_all(~replace(., is.nan(.), NA)) %>% ungroup()
+
+str(df_traits.fundiversity)
+
+traits.fundiversity <- scale(df_traits.fundiversity, center=TRUE, scale=TRUE)
+df_traits<- as.matrix(traits.fundiversity)
+str(df_traits)
+
+#adding small random noise to the data
+df_traits <- df_traits + matrix(rnorm(nrow(df_traits) * ncol(df_traits), mean = 0, sd = 1e-4), 
+                                nrow = nrow(df_traits), 
+                                ncol = ncol(df_traits))
+
+#sites and species
+df_species.fundiversity <- df.2 %>% dplyr::select(id, good.names) %>% mutate(presence=1)
+
+df_species.fundiversity.wide <- df_species.fundiversity %>% 
+  pivot_wider(
+    names_from = good.names,  # Assuming this is 'species_name'
+    values_from = presence,
+    id_cols = id,
+    values_fn = list(presence = max),  # Summarize duplicates
+    values_fill = list(presence = 0)  # Fill absent values with 0
+  )%>% remove_rownames %>% column_to_rownames(var="id")
+
+df_species.fundiversity.wide=as.matrix(df_species.fundiversity.wide)
+df_site <- Matrix::Matrix(df_species.fundiversity.wide, sparse = TRUE)
+str(df_site)
+
+#calculate functional richness, evenness, and divergence using fundiversity
+functional_richness.abundance <- fd_fric(df_traits, df_site)
+functional_evenness.abundance <- fd_feve(df_traits, df_site)
+functional_divergence.abundance <- fd_fdiv(df_traits, df_site)
+
+#rename id to site
+
+df_funrichness.2 <- functional_richness.abundance %>% rename(id = site)
+df_funevenness.2 <- functional_evenness.abundance %>% rename(id = site)
+df_fundivergence.2 <- functional_divergence.abundance %>% rename(id = site)
+
+# Merge the first two data frames
+df_fundiversity.abundance.1 <- merge(df_funrichness.2, df_funevenness.2, by = "id", all.x = FALSE) %>% unique()
+
+# Merge the result with the third data frame
+df_fundiversity.abundance <- merge(df_fundiversity.abundance.1, df_fundivergence.2, by = "id", all.x = FALSE)
+
+df_fundiversity.abundance.climate <- merge(df_fundiversity.abundance, df_fundiversity, by = "id", all.x = FALSE) %>% distinct(id, .keep_all = TRUE)
+```
+
+#####PCA for environment of fun diversity
+```{r}
+df_fundiveristy.environment <- df_fundiversity.abundance.climate %>% dplyr::select(MAT, MAP,soil.pH, Temp.annual.worldclim, Temp.seasonality.worldclim, Temp.max.worldclim, Temp.min.worldclim, Prec.annual.worldclim, Prec.seasonality.worldclim, Prec.max.worldclim, Prec.min.worldclim, mean_annual_vapor_worldclim, mean_annual_wind)
+
+df_pca.fundiversity.normalized <- scale(df_fundiveristy.environment)
+pca.fundiversity <- princomp(df_pca.fundiversity.normalized)
+summary(pca.fundiversity)
+pca.fundiversity$loadings[,1:4]
+pca.fundiversity$scores
+
+#add traits
+colnames(df_fundiversity.abundance.climate)
+
+df_pca.fundiversity.scores.traits<-cbind(df_fundiversity.abundance.climate, pca.fundiversity$scores[,1:5])
+
+
+###########################visualize pca 
+
+#Visualizing pca loadings
+# Convert loadings to a tidy dataframe
+df_cwm_pca_loading_fun <- as.data.frame(unclass(pca.fundiversity$loadings))
+df_cwm_pca_loading_fun$Variable <- rownames(df_cwm_pca_loading_fun)
+
+# Convert to long format
+df_cwm_pca_long_fun <- df_cwm_pca_loading_fun %>%
+  pivot_longer(cols = starts_with("Comp"), 
+               names_to = "PC",
+               values_to = "Loading") 
+#Only plotting first two PCs
+df_cwm_pca_long_fun<- df_cwm_pca_long_fun %>% dplyr::filter(PC %in% c("Comp.1", "Comp.2")) %>% mutate(PC = str_replace(PC, "Comp\\.", "PC"))
+
+# Add a categorical sign column
+df_cwm_pca_long_fun <- df_cwm_pca_long_fun %>%
+  mutate(Loading_sign = ifelse(Loading >= 0, "Positive", "Negative")) %>% group_by(PC) %>%
+  mutate(Variable = reorder(Variable, -abs(Loading))) %>%
+  ungroup()
+
+custom_order <- c(
+  "Prec.min.worldclim",
+  "Prec.seasonality.worldclim",
+  "Prec.max.worldclim",
+  "Prec.annual.worldclim",
+  "MAP",
+  "Temp.seasonality.worldclim",
+  "Temp.min.worldclim",
+  "Temp.max.worldclim",
+  "Temp.annual.worldclim",
+  "MAT",
+  "mean_annual_vapor_worldclim",
+  "mean_annual_wind",
+  "pH"
+)
+
+df_cwm_pca_long_fun$Variable <- factor(df_cwm_pca_long_fun$Variable, levels = rev(custom_order))
+
+# Plot
+pca_loadings_fun_fig <- ggplot(df_cwm_pca_long_fun, aes(x = Loading, y = Variable, fill = Loading_sign)) +
+  geom_col(width = 0.7) +
+  facet_wrap(~PC, scales = "free_x", ncol = 2) +
+  scale_fill_manual(values = c("Positive" = "darkorange", "Negative" = "darkblue")) +
+  labs(x = "PCA loading", y = NULL, title = "PCA Loadings of Environmental Variables") +
+  theme_minimal(base_size = 18) +
+  theme(
+    strip.text = element_text(size = 18, face = "bold"),
+    axis.text.y = element_text(size = 14),
+    axis.text.x = element_text(size = 18),
+    panel.grid.major.y = element_blank(), plot.title = element_text(size = 20, face = "bold"),
+    legend.position = "none"
+  )+ geom_vline(xintercept = c(-0.3, 0.3), linetype = "dashed", color = "gray40")
+
+################PCA biplot with biomes
+library(ggplot2)
+library(dplyr)
+library(grid)  
+library(scales)
+library(ggrepel)
+
+scores <- as.data.frame(pca.fundiversity$scores)
+scores$Biome <- df_pca.fundiversity.scores.traits$Biome
+
+loadings <- as.data.frame(unclass(pca.fundiversity$loadings)[, 1:2])  # PC1 and PC2
+loadings$Variable <- rownames(loadings)
+
+arrow_scale <- 9
+loadings <- loadings %>%
+  mutate(PC1 = Comp.1 * arrow_scale,
+         PC2 = Comp.2 * arrow_scale)
+
+fig_pca_fun_biplot <- ggplot(scores, aes(x = Comp.1, y = Comp.2, color = Biome)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  geom_segment(data = loadings,
+               aes(x = 0, y = 0, xend = PC1, yend = PC2),
+               arrow = arrow(length = unit(0.2, "cm")), color = "black") +
+  geom_text_repel(data = loadings,
+                aes(x = PC1 * 1.1, y = PC2 * 1.1, label = Variable),
+                color = "black",
+                size = 4,
+                fontface = "italic",
+                segment.color = "grey50",
+                max.overlaps = 20) +
+  scale_color_manual(values = c("#8B008B", "turquoise1", "#4DAF4A", "#F0E442",
+                                "#0072B2", "#D55E00", "#F781BF", "#999999", "#E41A1C")) +
+  labs(x = paste0("PC1 (", round(pca.cwm$sdev[1]^2 / sum(pca.cwm$sdev^2) * 100, 1), "%)"),
+       y = paste0("PC2 (", round(pca.cwm$sdev[2]^2 / sum(pca.cwm$sdev^2) * 100, 1), "%)"),
+       color = "Biome",
+       title = "PCA Biplot: Sites and Environmental Variables") +
+  theme_minimal(base_size = 18) + theme(plot.title = element_text(size = 20, face = "bold")) + geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40")
+
+
+#pca figure scree plot and PC1 and PC2 graph
+
+eig_fun_fig <- fviz_eig(pca.fundiversity, addlabels = TRUE, barfill = "gray40", barcolor = "black") +
+  theme_minimal(base_size = 18) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 18, face = "bold"),
+    plot.title = element_text(size = 20, face = "bold")
+  )
+
+#####Combine
+combined_pca_plot_fundiversity <- ggarrange(
+  eig_fun_fig, fig_pca_fun_biplot,pca_loadings_fun_fig,
+  ncol = 1, nrow = 3,
+  labels = c("a)", "b)","c)", font.label = list(size = 22, face = "bold"),  
+  heights = c(1, 1)
+))
+ggsave("combined_pca_plot_fundiversity.tiff", plot = combined_pca_plot_fundiversity, width = 14, height = 18, dpi = 300)
+
+##########################
+
+
+```
+####Testing if PCA makes sense with our data for fundiversity (Vieira, 2012 test): Testing against random data
+
+```{r}
+# My scaled env data for fundiversity
+data <- df_pca.fundiversity.normalized
+p <- ncol(data)
+n_iter <- 2000
+
+# observed PCA
+R_obs <- cor(data)
+eig_obs <- eigen(R_obs)
+eig_obs_values <- eig_obs$values
+eig_obs_pct <- eig_obs_values / sum(eig_obs_values) * 100
+load_obs <- eig_obs$vectors
+
+#bootstrap for 95% confidence interval for our observed PCA data
+set.seed(123)
+n_boot <- 2000
+obs_boot_mat <- matrix(NA, nrow = n_boot, ncol = p)
+for (i in 1:n_boot) {
+  boot_sample <- data[sample(1:nrow(data), replace = TRUE), ]
+  R_boot <- cor(boot_sample)
+  eig_boot <- eigen(R_boot)$values
+  eig_boot_pct <- eig_boot / sum(eig_boot) * 100
+  obs_boot_mat[i, ] <- eig_boot_pct
+}
+obs_lower <- apply(obs_boot_mat, 2, quantile, probs = 0.025)
+obs_upper <- apply(obs_boot_mat, 2, quantile, probs = 0.975)
+
+# null model
+rand_eigen_mat <- matrix(NA, nrow = n_iter, ncol = p)
+set.seed(456)
+for (i in 1:n_iter) {
+  data_null <- apply(data, 2, sample)
+  R_null <- cor(data_null)
+  eig_null <- eigen(R_null)$values
+  rand_eigen_mat[i, ] <- eig_null
+}
+rand_eigen_pct <- t(apply(rand_eigen_mat, 1, function(x) x / sum(x) * 100))
+rand_mean <- apply(rand_eigen_pct, 2, mean)
+rand_lower <- apply(rand_eigen_pct, 2, quantile, probs = 0.025)
+rand_upper <- apply(rand_eigen_pct, 2, quantile, probs = 0.975)
+
+# --- Combine into a dataframe for plotting ---
+df_plot <- data.frame(
+  PC = factor(1:p),
+  Original = eig_obs_pct,
+  Orig_Lower = obs_lower,
+  Orig_Upper = obs_upper,
+  Randomized = rand_mean,
+  Rand_Lower = rand_lower,
+  Rand_Upper = rand_upper
+)
+
+# plot observed vs null
+fig_PCA_test <- ggplot(df_plot, aes(x = as.numeric(as.character(PC)))) +
+  # Observed
+  geom_line(aes(y = Original, color = "Original Data"), size = 1.2) +
+  geom_point(aes(y = Original, color = "Original Data"), size = 2.5) +
+  geom_errorbar(aes(ymin = Orig_Lower, ymax = Orig_Upper),
+                width = 0.2, size = 0.8, color = "black") +
+
+  # Null
+  geom_line(aes(y = Randomized, color = "Randomized Null"), size = 1.2, linetype = "dashed") +
+  geom_point(aes(y = Randomized, color = "Randomized Null"), size = 2.5, shape = 16) +
+  geom_errorbar(aes(ymin = Rand_Lower, ymax = Rand_Upper),
+                width = 0.2, size = 0.8, color = "dodgerblue3") +
+
+  # Aesthetics
+  scale_color_manual(
+    name = "PCA Source",
+    values = c("Original Data" = "black", "Randomized Null" = "dodgerblue3")
+  ) +
+  scale_x_continuous(
+    breaks = seq_len(nrow(df_plot)),
+    labels = paste0("PC", seq_len(nrow(df_plot)))
+  ) +
+  scale_y_continuous(
+    limits = c(0, max(df_plot$Orig_Upper) + 5),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    x = "Principal Component",
+    y = "Percentage of Total Variation",
+    title = "Observed and Null Distribution of PCA Eigenvalues\nwith 95% Confidence Intervals"
+  ) +
+  theme_minimal(base_size = 18) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black"),
+    panel.grid.minor = element_blank(),
+    legend.position = "top"
+  )
+
+# Print the figure
+fig_PCA_test
+
+# Calculate p-values: proportion of null values >= observed
+p_values_PC <- numeric(p)
+
+for (j in 1:p) {
+  p_values_PC[j] <- mean(rand_eigen_pct[, j] >= eig_obs_pct[j])
+}
+
+# Optional: Adjust for multiple testing 
+p_values_adj <- p.adjust(p_values_PC, method = "BH")
+
+# Add to the plotting dataframe
+df_plot$P_Value <- p_values_PC
+df_plot$Adj_P_Value <- p_values_adj
+
+# View result
+df_plot[, c("PC", "Original", "P_Value", "Adj_P_Value")]
+
+
+```
+
+##Test for observed envrionmental variables vs randomized variables used for PCA of fundiversity
+
+```{r}
+# data is the scaled environmental variable matrix
+p <- ncol(data)
+n_iter <- 2000
+
+# observed pca data
+R_obs <- cor(data)
+eig_obs <- eigen(R_obs)
+
+# Observed loadings and eigenvalues
+loadings_PC1 <- eig_obs$vectors[, 1]
+lambda_PC1 <- eig_obs$values[1]
+index_obs_PC1 <- loadings_PC1^2 * lambda_PC1^2
+
+loadings_PC2 <- eig_obs$vectors[, 2]
+lambda_PC2 <- eig_obs$values[2]
+index_obs_PC2 <- loadings_PC2^2 * lambda_PC2^2
+
+
+# null distribution for PC1 - Pc3
+index_null_PC1 <- matrix(NA, nrow = n_iter, ncol = p)
+index_null_PC2 <- matrix(NA, nrow = n_iter, ncol = p)
+
+
+set.seed(123)
+for (i in 1:n_iter) {
+  data_null <- apply(data, 2, sample)
+  R_null <- cor(data_null)
+  eig_null <- eigen(R_null)
+  
+  # PC1
+  load1 <- eig_null$vectors[, 1]
+  lambda1 <- eig_null$values[1]
+  index_null_PC1[i, ] <- load1^2 * lambda1^2
+  
+  # PC2
+  load2 <- eig_null$vectors[, 2]
+  lambda2 <- eig_null$values[2]
+  index_null_PC2[i, ] <- load2^2 * lambda2^2
+  
+}
+
+# CALCULATE NULL SUMMARY STATs
+index_null_summary <- function(index_null_matrix) {
+  list(
+    mean = apply(index_null_matrix, 2, mean),
+    lower = apply(index_null_matrix, 2, quantile, probs = 0.025),
+    upper = apply(index_null_matrix, 2, quantile, probs = 0.975)
+  )
+}
+
+null_PC1 <- index_null_summary(index_null_PC1)
+null_PC2 <- index_null_summary(index_null_PC2)
+
+
+envn <- colnames(data)
+
+# VISUALIZATION FUNCTION
+plot_index <- function(envn, observed, null, title_label) {
+  df <- data.frame(
+    envn = factor(envn, levels = envn),
+    Observed = observed,
+    NullMean = null$mean,
+    Lower = null$lower,
+    Upper = null$upper
+  )
+  
+  ggplot(df, aes(x = envn)) +
+    geom_point(aes(y = NullMean), shape = 1, size = 3, color = "red") +
+    geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.2, color = "red") +
+    geom_point(aes(y = Observed), shape = 16, size = 3, color = "black") +
+    labs(x = "Environmental Variables", y = "Index", title = title_label) +
+    theme_minimal(base_size = 18) +
+    theme(
+      axis.text.x = element_text(color = "black", angle = 45, hjust = 1),
+      axis.title = element_text(face = "bold"),
+      plot.title = element_text(face = "bold")
+    )
+}
+
+# PLOT FOR PC1, PC2, PC3
+fig_PC1_index <- plot_index(envn, index_obs_PC1, null_PC1, "PC1 Loadings vs Null Distribution")
+fig_PC2_index <- plot_index(envn, index_obs_PC2, null_PC2, "PC2 Loadings vs Null Distribution")
+
+# Show plots
+print(fig_PC1_index)
+print(fig_PC2_index)
+
+##Combine the Vieira, 2012 test and the index plots for fundiversity data
+
+ggarranged_plot_PCA_test_fundiversity <- ggarrange(
+  fig_PCA_test, fig_PC1_index, fig_PC2_index,
+  labels = c("a)", "b)", "c)",
+  ncol = 2, nrow = 2,
+  align = "hv",
+  font.label = list(size = 26, face = "bold")
+))
+
+ggsave("PCA_test.fundiversity.tiff", plot = ggarranged_plot_PCA_test_fundiversity, width = 18, height = 18, dpi = 300)
+```
+
+######testing pca scores and their directionality in fundiversity data
+```{r} 
+#first look for correlation
+
+pc_scores <- as.data.frame(pca.fundiversity$scores[, 1:2])
+colnames(pc_scores) <- paste0("PC", 1:2)
+df_pca <- cbind(df_fundiveristy.environment, pc_scores)
+colnames(df_pca)
+
+fun_fig_pc1_prec_max <- ggplot(df_pca, aes(x = PC1, y = Prec.max.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label..,..p.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 500,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "maximum precipitation (mm)") +
+  theme_minimal(base_size = 16)
+
+fun_fig_pc1_prec_annual <- ggplot(df_pca, aes(x = PC1, y = Prec.annual.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label..,..p.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 1500,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "MAP_worldclim (mm)") +
+  theme_minimal(base_size = 16)
+
+fun_fig_pc1_map <- ggplot(df_pca, aes(x = PC1, y = MAP)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label..,..p.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 1500,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "MAP (mm)") +
+  theme_minimal(base_size = 16)
+
+fun_fig_pc1_temp_min <- ggplot(df_pca, aes(x = PC1, y = Temp.min.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label..,..p.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 10,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "minimum temperature (°C)") +
+  theme_minimal(base_size = 16)
+
+fun_fig_pc1_temp_annual <- ggplot(df_pca, aes(x = PC1, y = Temp.annual.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label..,..p.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 20,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "MAT_worldclim (°C)") +
+  theme_minimal(base_size = 16)
+
+fun_fig_pc1_mat <- ggplot(df_pca, aes(x = PC1, y = MAT)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label..,..p.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 20,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "MAT (°C)") +
+  theme_minimal(base_size = 16)
+
+fun_fig_pc1_vapor <- ggplot(df_pca, aes(x = PC1, y = mean_annual_vapor_worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label..,..p.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 3,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC1 Scores",
+       y = "MAT_worldclim (°C)") +
+  theme_minimal(base_size = 16)
+
+
+#combine figures (PC1)
+ggarranged_plot_PC1_fundiversity <- ggarrange(fun_fig_pc1_vapor, fun_fig_pc1_temp_annual, fun_fig_pc1_mat, fun_fig_pc1_temp_min, fig_pc1_prec_annual, fig_pc1_prec_max, fig_pc1_map,
+  labels = c("a)", "b)", "c)", "d)", "e)", "f)", "g)"),  
+  ncol = 2, nrow = 4,        
+  align = "hv",  font.label = list(size = 18, face = "bold")               
+)
+
+
+ggarranged_plot_PC1_titled_fundiversity <- annotate_figure(
+  ggarranged_plot_PC1_fundiversity,
+  top = text_grob("Relationships Between PC1 and Environmental Variables", 
+                  face = "bold", size = 20)
+)
+
+ggsave("PC1_relationships_fundiversity.tiff", plot = ggarranged_plot_PC1_titled_fundiversity, width = 14, height = 16, dpi = 300)
+
+###############testing pc2 and their directionality
+fun_fig_pc2_prec.min <- ggplot(df_pca, aes(x = PC2, y = Prec.min.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label..,..p.label.., sep = "~`,`~")),
+         label.x = -4, label.y = 300,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC2 Scores",
+       y = "minimum precipitation (mm)") +
+  theme_minimal(base_size = 16)
+
+fun_fig_pc2_prec.seasonality <- ggplot(df_pca, aes(x = PC2, y = Prec.seasonality.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x.npc = 0.02, label.y.npc = 0.98,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC2 Scores",
+       y = "Precipitation seasonality")+
+  theme_minimal(base_size = 16)
+
+fun_fig_pc2_temp_max <- ggplot(df_pca, aes(x = PC2, y = Temp.max.worldclim)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+ stat_cor(method = "pearson",
+         aes(label = paste(..r.label.., ..rr.label.., sep = "~`,`~")),
+         label.x.npc = 0.02, label.y.npc = 0.98,
+         size = 5)+
+  theme_minimal() +
+  labs(x = "PC2 Scores",
+       y = "maximum temperature (°C)")+
+  theme_minimal(base_size = 16)
+
+
+#combine figures (PC2)
+ggarranged_plot_PC2_fun <- ggarrange(fun_fig_pc2_prec.min, fun_fig_pc2_prec.seasonality, fun_fig_pc2_temp_max,
+  labels = c("a)", "b)", "c)",  
+  ncol = 2, nrow = 2,             
+  align = "hv",  font.label = list(size = 18, face = "bold")                   
+))
+
+ggarranged_plot_PC2_titled_fun <- annotate_figure(
+  ggarranged_plot_PC2_fun,
+  top = text_grob("Relationships Between PC2 and Environmental Variables", 
+                  face = "bold", size = 20)
+)
+
+ggsave("PC2_relationships_fundiversity.tiff", plot = ggarranged_plot_PC2_titled_fun, width = 14, height = 12, dpi = 300)
+
+```
+
+######fundiversity gams
+```{r}
+df_pca.fundiversity.scores.traits$Biome=as.factor(df_pca.fundiversity.scores.traits$Biome)
+df_pca.fundiversity.scores.traits$sample_type=as.factor(df_pca.fundiversity.scores.traits$sample_type)
+df_pca.fundiversity.scores.traits$marker=as.factor(df_pca.fundiversity.scores.traits$marker)
+df_pca.fundiversity.scores.traits$sequencing_platform=as.factor(df_pca.fundiversity.scores.traits$sequencing_platform)
+df_pca.fundiversity.scores.traits$year_of_sampling=as.numeric(df_pca.fundiversity.scores.traits$year_of_sampling)
+
+colnames(df_pca.fundiversity.scores.traits)
+
+###############################################functional richness
+colnames(df_pca.fundiversity.scores.traits)
+str(df_pca.fundiversity.scores.traits)
+unique(df_pca.fundiversity.scores.traits$sample_type)
+
+model.fun.rich = mgcv::bam(log(FRic)~ Comp.1 + Comp.2 +  s(Biome, bs = "re")  +s(marker, bs = "re") +s(sequencing_platform, bs = "re") + s(year_of_sampling, bs = "re")+ s(Latitude_Decimal, Longitude_Decimal, bs = "sos"),  method = "REML", data = df_pca.fundiversity.scores.traits)
+
+gam.check(model.fun.rich)
+summary(model.fun.rich)
+
+# Create a data frame with fitted values and residuals (diagnostics)
+residuals_df <- data.frame(
+  Fitted_Values = fitted(model.fun.rich),
+  Residuals = residuals(model.fun.rich)
+)
+
+# Residuals vs. Fitted Values Plot
+residuals_plot <- ggplot(residuals_df, aes(x = Fitted_Values, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values"
+  ) +
+  theme_minimal()
+
+# Histogram of Residuals Plot
+histogram_plot <- ggplot(residuals_df, aes(x = Residuals)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(
+    x = "Residuals",
+    y = "Frequency",
+    title = "Histogram of Residuals"
+  ) +
+  theme_minimal()
+
+# Combine the two plots side by side
+combined_plot.richness <- residuals_plot + theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  ) + histogram_plot + plot_layout(ncol = 2)+ theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )
+
+# Create a new dataset for prediction
+data.2 <- df_pca.fundiversity.scores.traits
+data.2 <- data.2[rep(1, 100), ]  # Replicate a row to hold other variables constant
+data.2$Comp.1 <- seq(min(df_pca.fundiversity.scores.traits$Comp.1), 
+                       max(df_pca.fundiversity.scores.traits$Comp.1), length.out = 100)
+
+# Predict partial effect
+data.2$predrich <- predict(model.fun.rich, newdata = data.2, type = "response")
+
+##functiional richness vs comp.1
+
+fun.rich.pc1.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.fundiversity.scores.traits, 
+             aes(x = Comp.1, y = log(FRic), fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = data.2, aes(x = Comp.1, y = predrich), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.1, y = log(FRic), fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.1, y = log(FRic), color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Log(Functional richness)") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999","#E41A1C"))  + scale_fill_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+unique(df_pca.fundiversity.scores.traits$Biome)
+###################################Fun richness vs Comp.2 fig
+# Create a new dataset for prediction
+data <- df_pca.fundiversity.scores.traits
+data <- data[rep(1, 100), ]  # Replicate a row to hold other variables constant
+data$Comp.2 <- seq(min(df_pca.fundiversity.scores.traits$Comp.2), 
+                       max(df_pca.fundiversity.scores.traits$Comp.2), length.out = 100)
+
+# Predict partial effect
+data$predrich2 <- predict(model.fun.rich, newdata = data, type = "response")
+
+fun.rich.pc2.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.fundiversity.scores.traits, 
+             aes(x = Comp.2, y = log(FRic), fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = data, aes(x = Comp.2, y = predrich2), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.2, y = log(FRic), fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.2, y = log(FRic), color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Log(Functional richness)") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  + scale_color_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999","#E41A1C"))  + scale_fill_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+
+
+##########################functional evenness
+colnames(df_pca.fundiversity.scores.traits)
+model.fun.even = mgcv::bam(log(FEve)~ Comp.1 + Comp.2 +  s(Biome, bs = "re")  +s(marker, bs = "re") +s(sequencing_platform, bs = "re") + s(year_of_sampling, bs = "re")+ s(Latitude_Decimal, Longitude_Decimal, bs = "sos"),  method = "REML", data = df_pca.fundiversity.scores.traits)
+
+gam.check(model.fun.even)
+summary(model.fun.even)
+
+
+# Create a data frame with fitted values and residuals
+residuals_df <- data.frame(
+  Fitted_Values = fitted(model.fun.even),
+  Residuals = residuals(model.fun.even)
+)
+
+# Residuals vs. Fitted Values Plot
+residuals_plot <- ggplot(residuals_df, aes(x = Fitted_Values, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values"
+  ) +
+  theme_minimal()
+
+# Histogram of Residuals Plot
+histogram_plot <- ggplot(residuals_df, aes(x = Residuals)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(
+    x = "Residuals",
+    y = "Frequency",
+    title = "Histogram of Residuals"
+  ) +
+  theme_minimal()
+
+# Combine the two plots side by side
+combined_plot.evenness <- residuals_plot +theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )+ histogram_plot + plot_layout(ncol = 2)+ theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )
+
+##############################fun evenness figure vs Comp.1
+
+
+# Create a new dataset for prediction
+data.1 <- df_pca.fundiversity.scores.traits
+data.1 <- data.1[rep(1, 100), ]  # Replicate a row to hold other variables constant
+data.1$Comp.1 <- seq(min(df_pca.fundiversity.scores.traits$Comp.1), 
+                       max(df_pca.fundiversity.scores.traits$Comp.1), length.out = 100)
+
+# Predict partial effect
+data.1$predeven <- predict(model.fun.even, newdata = data.1, type = "response")
+
+fun.even.pc1.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.fundiversity.scores.traits, 
+             aes(x = Comp.1, y = log(FEve), fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = data.1, aes(x = Comp.1, y = predeven), 
+            color = "black", size = 1.5, linetype = "dashed") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.1, y = log(FEve), fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.1, y = log(FEve), color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Log(Functional evenness)") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999","#E41A1C"))  + scale_fill_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+###################################Fun evenness vs Comp.2 fig
+# Create a new dataset for prediction
+data.1 <- df_pca.fundiversity.scores.traits
+data.1 <- data.1[rep(1, 100), ]  # Replicate a row to hold other variables constant
+
+data.1$Comp.2 <- seq(min(df_pca.fundiversity.scores.traits$Comp.2), 
+                       max(df_pca.fundiversity.scores.traits$Comp.2), length.out = 100)
+
+# Predict partial effect
+data.1$predeven2 <- predict(model.fun.even, newdata = data.1, type = "response")
+
+fun.even.pc2.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.fundiversity.scores.traits, 
+             aes(x = Comp.2, y = log(FEve), fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = data.1, aes(x = Comp.2, y = predeven2), 
+            color = "black", size = 1.5, linetype = "dashed") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.2, y = log(FEve), fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.2, y = log(FEve), color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Log(Functional evenness)") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999","#E41A1C"))  + scale_fill_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+#########functional divergence
+
+model.fun.div = mgcv::bam(log(FDiv)~ Comp.1 + Comp.2 +  s(Biome, bs = "re")  +s(marker, bs = "re") +s(sequencing_platform, bs = "re") + s(year_of_sampling, bs = "re")+ s(Latitude_Decimal, Longitude_Decimal, bs = "sos"),  method = "REML", data = df_pca.fundiversity.scores.traits)
+
+gam.check(model.fun.div)
+summary(model.fun.div)
+
+# Create a data frame with fitted values and residuals
+residuals_df <- data.frame(
+  Fitted_Values = fitted(model.fun.div),
+  Residuals = residuals(model.fun.div)
+)
+
+# Residuals vs. Fitted Values Plot
+residuals_plot <- ggplot(residuals_df, aes(x = Fitted_Values, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values"
+  ) +
+  theme_minimal()
+
+# Histogram of Residuals Plot
+histogram_plot <- ggplot(residuals_df, aes(x = Residuals)) +
+  geom_histogram(bins = 30, fill = "gray", color = "black") +
+  labs(
+    x = "Residuals",
+    y = "Frequency",
+    title = "Histogram of Residuals"
+  ) +
+  theme_minimal()
+
+# Combine the two plots side by side
+combined_plot.divergence <- residuals_plot + theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )+ histogram_plot + plot_layout(ncol = 2)+ theme(
+    plot.title = element_text( size = 18), # Increase title size
+    axis.text.x = element_text(size = 18),              
+    axis.text.y = element_text(size = 18),              
+    axis.title.x = element_text(size = 18),                       
+    axis.title.y = element_text(size = 18)                       
+  )
+
+# Combine the annotated plots in a single column layout
+final_plot <- (combined_plot.richness | combined_plot.evenness | combined_plot.divergence) + plot_layout(ncol = 1, nrow=3)
+
+ggsave("diagnostic_plot_fundiversity.tiff", plot = final_plot, width = 14, height = 14)
+
+
+##############################fun divergence figure vs Comp.1
+
+
+# Create a new dataset for prediction
+data.2 <- df_pca.fundiversity.scores.traits
+data.2 <- data.2[rep(1, 100), ]  # Replicate a row to hold other variables constant
+data.2$Comp.1 <- seq(min(df_pca.fundiversity.scores.traits$Comp.1), 
+                       max(df_pca.fundiversity.scores.traits$Comp.1), length.out = 100)
+
+# Predict partial effect
+data.2$preddiv <- predict(model.fun.div, newdata = data.2, type = "response")
+
+fun.div.pc1.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.fundiversity.scores.traits, 
+             aes(x = Comp.1, y = log(FDiv), fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = data.2, aes(x = Comp.1, y = preddiv), 
+            color = "black", size = 1.5, linetype = "solid") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.1, y = log(FDiv), fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.1, y = log(FDiv), color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Log(Functional divergence)") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999","#E41A1C"))  + scale_fill_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+###################################Fun divergence vs Comp.2 fig
+# Create a new dataset for prediction
+data <- df_pca.fundiversity.scores.traits
+data <- data[rep(1, 100), ]  # Replicate a row to hold other variables constant
+data$Comp.2 <- seq(min(df_pca.fundiversity.scores.traits$Comp.2), 
+                       max(df_pca.fundiversity.scores.traits$Comp.2), length.out = 100)
+
+# Predict partial effect
+data$prediv2 <- predict(model.fun.div, newdata = data, type = "response")
+
+fun.div.pc2.fig <- ggplot() +
+  # Add the observed data points
+  geom_point(data = df_pca.fundiversity.scores.traits, 
+             aes(x = Comp.2, y = log(FDiv), fill = Biome), 
+             size = 3, shape = 21, stroke = 0.5, color = "white", alpha = 0.8) +
+  geom_line(data = data, aes(x = Comp.2, y = prediv2), 
+            color = "black", size = 1.5, linetype = "dashed") +
+  
+  # Add glow effect for biome-specific lines
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.2, y = log(FDiv), fill = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 3, color = "white", alpha = 0.5) +  # Glow layer
+  geom_smooth(data = df_pca.fundiversity.scores.traits, 
+              aes(x = Comp.2, y = log(FDiv), color = Biome, linetype = Biome), 
+              method = "lm", se = FALSE, size = 1.5) + scale_linetype_manual(values = c("dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed", "dashed")) +
+  theme(legend.position = "right",  # Place the legend on the right
+    legend.title = element_text(size = 14),  # Adjust legend title size
+    legend.text = element_text(size = 14), # Italic subtitle
+    axis.title = element_text(size = 18, face = "bold"),  # Bold axis titles
+    axis.text = element_text(size = 18, face = "bold") , # Adjust axis text size
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),panel.border = element_rect(colour = "black", fill = NA, size = 1.2),
+        axis.ticks.length = unit(0.2, "cm"),
+        axis.ticks = element_line(size = 0),  panel.background = element_rect(fill = "white")) + ylab("Log(Functional divergence)") +xlab("Principal component scores")+ theme(panel.spacing.x = unit(0, "cm")) + theme(plot.margin = unit(c(0, 0, 0.5, 0.1), "cm"))  +  scale_color_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999","#E41A1C"))  + scale_fill_manual(values = c("#8B008B","#4DAF4A","#F0E442","#0072B2" ,"#D55E00", "#F781BF", "#999999", "#E41A1C")) 
+
+
+##########################combine fundiversity pca figures #############################
+
+figure.richness <- ggarrange(fun.rich.pc1.fig , fun.rich.pc2.fig + rremove("ylab"), # remove axis labels from plotslabels = NULL, 
+                    ncol = 2, nrow = 1, legend = "none", heights = c(0.25,0.25), widths = c(1.12, 1),
+                    font.label = list(size = 10, color = "black", face = "bold", family = NULL, position = "top"))
+
+ 
+figure.evenness <- ggarrange(fun.even.pc1.fig , fun.even.pc2.fig + rremove("ylab"), # remove axis labels from plots
+                    labels = NULL, 
+                    ncol = 2, nrow = 1, legend = "none", heights = c(1,1), widths = c(1.12,1),
+                    font.label = list(size = 10, color = "black", face = "bold", family = NULL, position = "top")) 
+
+figure.divergence <- ggarrange(fun.div.pc1.fig , fun.div.pc2.fig + rremove("ylab"), # remove axis labels from plots
+                    labels = NULL, 
+                    ncol = 2, nrow = 1, legend = "none", heights = c(1.12,1.12), widths = c(1.12,1),
+                    font.label = list(size = 10, color = "black", face = "bold", family = NULL, position = "top")) 
+
+
+figure.combine.1.fundiversity <- ggarrange(figure.richness, figure.evenness,figure.divergence, # remove axis labels from plots
+                    labels = NULL,
+                    ncol = 1, nrow = 3, common.legend = TRUE)
+
+
+
+ggsave("combined.fundiversity.tiff", figure.combine.1.fundiversity, height = 12, width = 14, units = "in", dpi = 300)
+
+###spatial fundiversity
+############################################### shape patterns 
+png("spatial_functional_richness.png", width = 1600, height = 1200, res = 300)
+
+vis.gam(model.fun.rich,
+        view = c("Latitude_Decimal", "Longitude_Decimal"),
+        type = "response",
+        plot.type = "contour",
+        color = "topo",
+        main = "Spatial variation in predicted functional richness")
+
+
+dev.off()
+
+png("spatial_functional_evenness.png", width = 1600, height = 1200, res = 300)
+
+vis.gam(model.fun.even,
+        view = c("Latitude_Decimal", "Longitude_Decimal"),
+        type = "response",
+        plot.type = "contour",
+        color = "topo",
+        main = "Spatial variation in predicted functional evenness")
+
+
+dev.off()
+
+png("spatial_functional_divergence.png", width = 1600, height = 1200, res = 300)
+
+vis.gam(model.fun.div,
+        view = c("Latitude_Decimal", "Longitude_Decimal"),
+        type = "response",
+        plot.type = "contour",
+        color = "topo",
+        main = "Spatial variation in predicted functional divergence")
+
+
+dev.off()
+
+
+```
+
